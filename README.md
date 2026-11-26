@@ -20,3 +20,7 @@ Download the direct diagnostic IPA from Releases, then use your own valid signin
 ### Diagnostic app identity
 
 TC Mesa uses the stable application bundle identifier `com.sky9662.tcmesadiagnostics`, already registered by existing Mesa testers. Do not change it between releases. The final IPA identifier is checked during CI. The earlier TC Diagnostics app has a separate identifier; framework identifiers remain unchanged.
+
+### Local packaging preflight
+
+Use separate, new IPA and audit report paths outside both input trees. Existing reports are preserved, including after a failed preflight. The source-only fixture tests cover path collisions. Round 53 device rendering passed; game-specific imports and JIT remain unverified.

@@ -2,7 +2,7 @@
 import hashlib, json, pathlib, plistlib, shutil, subprocess, sys, tempfile, unittest, zipfile
 from tc_windows import NAMES, convert, inspect
 from test_tc_windows import sample
-from package_tc_local import package, copy_game_resources
+from package_tc_local import package, copy_game_resources, validate_local_paths
 
 def resources(app):
     p=app/"Contents"/"Resources"
@@ -12,6 +12,17 @@ def resources(app):
     (p/"icon.icns").write_bytes(b"fixture-icon")
 
 class Test(unittest.TestCase):
+    def test_output_paths_protect_inputs_and_prior_reports(self):
+        with tempfile.TemporaryDirectory() as td:
+            root=pathlib.Path(td);game=root/"game";kit=root/"kit";game.mkdir();kit.mkdir()
+            out=root/"out.ipa";audit=root/"audit.json"
+            validate_local_paths(game,kit,out,audit)
+            for bad in (game/"audit.json",kit/"audit.json",out):
+                with self.assertRaises(ValueError):validate_local_paths(game,kit,out,bad)
+            audit.write_text("keep")
+            with self.assertRaises(ValueError):validate_local_paths(game,kit,out,audit)
+            self.assertEqual(audit.read_text(),"keep")
+
     def test_resource_layout(self):
         with tempfile.TemporaryDirectory() as td:
             root=pathlib.Path(td);app=root/"Turing Complete.app";bundle=root/"ios";bundle.mkdir()

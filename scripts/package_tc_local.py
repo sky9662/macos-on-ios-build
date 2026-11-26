@@ -62,7 +62,18 @@ def validate_frameworks(root):
         if name=="HIToolboxShim" and info.get("CFBundleIdentifier")!="com.apple.HIToolbox":
             raise ValueError("GLFW keyboard bundle identifier missing")
 
+def validate_local_paths(game,kit,out,audit):
+    # Never overwrite source inputs or a prior audit, even on a failed preflight.
+    game,kit,out,audit=(p.resolve() for p in (game,kit,out,audit))
+    for target in (out,audit):
+        if target.exists():raise ValueError("refusing to overwrite existing output: "+str(target))
+        if not target.parent.is_dir():raise ValueError("missing output parent: "+str(target.parent))
+        if any(target==root or root in target.parents for root in (game,kit)):
+            raise ValueError("output must be outside input trees")
+    if out==audit:raise ValueError("IPA and report paths must differ")
+
 def package(game,kit,out,audit):
+    validate_local_paths(game,kit,out,audit)
     if out.exists():raise ValueError("refusing to overwrite output")
     app,mac_info=macapp(game)
     data=report(game)
@@ -70,7 +81,7 @@ def package(game,kit,out,audit):
     mapping,missing=resolve_deps(data,cat)
     data["unresolved"]=missing
     data["mapping"]=mapping
-    audit.write_text(json.dumps(data,indent=2),encoding="utf-8")
+    with audit.open("x",encoding="utf-8") as f:json.dump(data,f,indent=2)
     if missing:raise ValueError(f"{len(missing)} unresolved imports/dependencies; see {audit}. No IPA produced.")
     mapping={k:packaged_path(v) for k,v in mapping.items()}
     with tempfile.TemporaryDirectory(dir=out.parent) as td:
