@@ -138,6 +138,7 @@ void TCMacDiagnostics(NSView *view){
         void (*size)(id,int *,int *)=dlsym(RTLD_DEFAULT,"TCMesaDrawableSize");
         BOOL (*present)(id)=dlsym(RTLD_DEFAULT,"TCMesaPresentResult");
         BOOL (*center)(id,unsigned char *)=dlsym(RTLD_DEFAULT,"TCMesaCenterBGRA");
+        NSUInteger (*frames)(id)=dlsym(RTLD_DEFAULT,"TCMesaSubmittedFrames");
         int w=0,h=0;if(size)size(ctx,&w,&h);
         BOOL a=NO,b410=NO,shown=NO,pixels=NO;
         if(version&&w>0&&h>0){
@@ -145,7 +146,24 @@ void TCMacDiagnostics(NSView *view){
             [r appendFormat:@"\nContext sharing, resize and restore: %@",lifecycle?@"PASS":@"FAIL"];
             [ctx makeCurrentContext];
             a=desktopDraw(@"150",w,h);b410=desktopDraw(@"410",w,h);
+            // Seven different frames exercise all three slots twice,
+            // including reuse after an earlier Metal reader.
+            NSUInteger before=frames?frames(ctx):0;
+            BOOL ringOK=frames&&center&&present;
+            for(unsigned i=0;i<7;i++){
+                float red=(i&1)?1:0,blue=(i&1)?0:1;
+                glDrawBuffer(GL_BACK);glClearColor(red,0.25f,blue,1);glClear(GL_COLOR_BUFFER_BIT);
+                [ctx flushBuffer];
+                unsigned char bgra[4]={0};
+                BOOL match=center&&center(ctx,bgra)&&
+                    bgra[0]==(i&1?0:255)&&bgra[1]>=60&&bgra[1]<=68&&
+                    bgra[2]==(i&1?255:0)&&bgra[3]==255;
+                ringOK=ringOK&&match&&glGetError()==GL_NO_ERROR;
+            }
+            ringOK=ringOK&&frames&&frames(ctx)==before+7&&present&&present(ctx);
+            [r appendFormat:@"\nIOSurface ring / 7 frames: %@",ringOK?@"PASS":@"FAIL"];
             if(!b410&&a)desktopDraw(@"150",w,h);
+            else if(b410)desktopDraw(@"410",w,h);
             [ctx flushBuffer];shown=present&&present(ctx);
             unsigned char bgra[4]={0};pixels=center&&center(ctx,bgra)&&bgra[0]>240&&bgra[1]>=60&&bgra[1]<=68&&bgra[2]<10&&bgra[3]>240;
         }

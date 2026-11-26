@@ -12,7 +12,7 @@ def replace(path,old,new):
 replace(up/"shim/overrides/AppKit.m",(repo/"diagnostics/appkit.m").read_text(),(repo/"mesa/context/appkit-context.m").read_text())
 (up/"probe/macapp/tc_diagnostics.m").write_text((repo/"mesa/context/mac-diagnostics.m").read_text())
 replace(up/"probe/build.sh","-framework GameController -framework OpenGLES -framework UniformTypeIdentifiers ../shim/overrides/AppKit.m",
-        '-framework GameController -framework Metal -framework UniformTypeIdentifiers -F"$T" -framework OpenGLShim ../shim/overrides/AppKit.m')
+        '-framework GameController -framework Metal -framework IOSurface -framework UniformTypeIdentifiers -F"$T" -framework OpenGLShim ../shim/overrides/AppKit.m')
 
 # Register the embedded OpenGL bundle before GLFW's initialization lookup.
 # Only modify the pinned disposable AppKit shim.

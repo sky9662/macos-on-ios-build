@@ -50,6 +50,7 @@ export UDID=compile-only TEAM=compile-only IDENTITY=compile-only
 bash -n "$up/probe/build.sh"
 (cd "$up/probe" && bash build.sh mac shim)
 xcrun otool -L "$T/AppKitShim.framework/AppKitShim" | grep -F @rpath/OpenGLShim.framework/OpenGLShim
+xcrun otool -L "$T/AppKitShim.framework/AppKitShim" | grep -F IOSurface.framework/IOSurface
 if xcrun otool -L "$T/AppKitShim.framework/AppKitShim" | grep -F OpenGLES.framework; then exit 1; fi
 xcrun nm -u "$T/MacProbe.app/Contents/MacOS/MacProbe" | awk '{print $NF}' | grep '^_gl' | sort -u > "$T/mac-gl-imports.txt"
 while IFS= read -r symbol; do grep -Fx "$symbol" "$T/gl-exports.txt"; done < "$T/mac-gl-imports.txt"
