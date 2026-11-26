@@ -113,7 +113,17 @@ void TCMacDiagnostics(NSView *view){
     BOOL registration=registered&&actual&&[[actual.path stringByStandardizingPath] isEqualToString:[expected.path stringByStandardizingPath]]&&
         CFBundleGetFunctionPointerForName(registered,CFSTR("glTexBuffer"));
     [r appendFormat:@"\nGLFW identifier lookup: %@",registration?@"PASS":@"FAIL"];
+    [r appendFormat:@"\nPixel format: %@",fmt?@"PASS":@"FAIL"];
     NSOpenGLContext *ctx=fmt?[[NSOpenGLContext alloc]initWithFormat:fmt shareContext:nil]:nil;
+    const char *(*initReport)(void)=dlsym(RTLD_DEFAULT,"TCMesaInitReport");
+    if(initReport&&initReport())[r appendFormat:@"%s",initReport()];
+    if(!ctx&&fmt){
+        attrs[3]=NSOpenGLProfileVersion4_1Core;
+        NSOpenGLPixelFormat *alternate=[[NSOpenGLPixelFormat alloc]initWithAttributes:attrs];
+        NSOpenGLContext *trial=alternate?[[NSOpenGLContext alloc]initWithFormat:alternate shareContext:nil]:nil;
+        if(initReport&&initReport())[r appendFormat:@"%s",initReport()];
+        [r appendFormat:@"\n4.1 alternative: %@",trial?@"PASS":@"FAIL"];
+    }
     if(ctx){
         [ctx setView:view];[ctx makeCurrentContext];
         const GLubyte *renderer=glGetString(GL_RENDERER),*version=glGetString(GL_VERSION);

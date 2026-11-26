@@ -152,6 +152,28 @@ static char tcMesaHiDPIKey;
 @end
 // Context ownership is main-thread-only in this adapter. Derive current
 // object from Mesa's actual current context, not a guessed global selection.
+// Keep a device-visible report even when context construction returns nil.
+static NSMutableString *tcInitReport;
+static void *tcVKHandle;
+const char *TCMesaInitReport(void) { return tcInitReport.UTF8String; }
+typedef struct { uint32_t type; const void *next; const char *app; uint32_t appVersion; const char *engine; uint32_t engineVersion, apiVersion; } TCVKApp;
+typedef struct { uint32_t type; const void *next; uint32_t flags; const TCVKApp *app; uint32_t layers; const char *const *layerNames; uint32_t extensions; const char *const *extensionNames; } TCVKCreate;
+static void tcProbeVulkan(void *handle) {
+    int32_t (*create)(const TCVKCreate *,const void *,void **)=dlsym(handle,"vkCreateInstance");
+    int32_t (*enumerate)(void *,uint32_t *,void **)=dlsym(handle,"vkEnumeratePhysicalDevices");
+    void (*destroy)(void *,const void *)=dlsym(handle,"vkDestroyInstance");
+    if(!create||!enumerate||!destroy){[tcInitReport appendString:@"\nVulkan symbols: FAIL"];return;}
+    TCVKApp app={.type=0,.app="TC Mesa diagnostic",.apiVersion=(1u<<22)};
+    TCVKCreate info={.type=1,.app=&app};
+    void *instance=NULL;
+    int32_t result=create(&info,NULL,&instance);
+    [tcInitReport appendFormat:@"\nVulkan instance: %d",(int)result];
+    if(result==0&&instance){
+        uint32_t count=0;result=enumerate(instance,&count,NULL);
+        [tcInitReport appendFormat:@"\nVulkan GPUs: %u (result %d)",(unsigned)count,(int)result];
+        destroy(instance,NULL);
+    }
+}
 static NSMapTable<NSValue *,NSOpenGLContext *> *tcMesaContexts;
 static NSValue *tcContextKey(TCOSContext ctx){return [NSValue valueWithPointer:ctx];}
 @implementation NSOpenGLContext
@@ -162,18 +184,25 @@ static NSValue *tcContextKey(TCOSContext ctx){return [NSValue valueWithPointer:c
 }
 - (instancetype)initWithFormat:(NSOpenGLPixelFormat *)format shareContext:(NSOpenGLContext *)share {
     if(!(self=[super init])||!format||![NSThread isMainThread])return nil;
+    tcInitReport=[NSMutableString string];
     // Set the real backend before creating the first OSMesa context.
     NSString *vk=[NSBundle.mainBundle.privateFrameworksPath stringByAppendingPathComponent:@"MoltenVK.framework/MoltenVK"];
-    if(![[NSFileManager defaultManager] isReadableFileAtPath:vk])return nil;
+    if(![[NSFileManager defaultManager] isReadableFileAtPath:vk]){[tcInitReport appendString:@"\nMoltenVK file: FAIL"];return nil;}
     setenv("GALLIUM_DRIVER","zink",1);
     setenv("ZINK_VULKAN_LIBRARY",vk.fileSystemRepresentation,1);
     setenv("MVK_CONFIG_LOG_LEVEL","1",0);
+    if(!tcVKHandle)tcVKHandle=dlopen(vk.fileSystemRepresentation,RTLD_NOW|RTLD_LOCAL);
+    if(!tcVKHandle){const char *err=dlerror();[tcInitReport appendFormat:@"\nMoltenVK load: %s",err?err:"unknown"];return nil;}
+    [tcInitReport appendString:@"\nMoltenVK load: PASS"];
+    if(!share)tcProbeVulkan(tcVKHandle);
     const int attrs[]={TC_FORMAT,TC_BGRA,TC_DEPTH,format.depth,TC_STENCIL,format.stencil,
       TC_PROFILE,TC_CORE,TC_MAJOR,format.major,TC_MINOR,format.minor,0};
     _mesa=OSMesaCreateContextAttribs(attrs,share?share.mesa:NULL);
+    [tcInitReport appendFormat:@"\nOSMesa %d.%d: %@",format.major,format.minor,_mesa?@"PASS":@"FAIL"];
     if(!_mesa)return nil;
     _device=MTLCreateSystemDefaultDevice();
     _queue=[_device newCommandQueue];
+    [tcInitReport appendFormat:@"\nMetal device: %@; queue: %@",_device?@"PASS":@"FAIL",_queue?@"PASS":@"FAIL"];
     if(!_queue)return nil;
     if(!tcMesaContexts)tcMesaContexts=[NSMapTable strongToWeakObjectsMapTable];
     [tcMesaContexts setObject:self forKey:tcContextKey(_mesa)];
