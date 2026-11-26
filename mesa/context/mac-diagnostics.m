@@ -53,6 +53,51 @@ static BOOL desktopDraw(NSString *version,int w,int h){
     if(program)glDeleteProgram(program);if(vs)glDeleteShader(vs);if(fs)glDeleteShader(fs);
     return glGetError()==GL_NO_ERROR&&ok;
 }
+// Actual shared buffer contents and context restoration, not just handles.
+static BOOL testContextLifecycle(NSOpenGLContext *primary,NSOpenGLPixelFormat *fmt,void (*size)(id,int *,int *)){
+    if(!size||[NSOpenGLContext currentContext]!=primary)return NO;
+    GLuint buffer=0;glGenBuffers(1,&buffer);glBindBuffer(GL_ARRAY_BUFFER,buffer);
+    const GLuint initial[]={11,22,33,44};glBufferData(GL_ARRAY_BUFFER,sizeof(initial),initial,GL_STATIC_DRAW);
+    BOOL ok=buffer&&glGetError()==GL_NO_ERROR;
+    NSOpenGLContext *other=[[NSOpenGLContext alloc]initWithFormat:fmt shareContext:primary];
+    NSView *first=[[NSView alloc]initWithFrame:NSMakeRect(0,0,24,20)];
+    NSView *second=[[NSView alloc]initWithFrame:NSMakeRect(0,0,31,19)];
+    [first setWantsBestResolutionOpenGLSurface:NO];[second setWantsBestResolutionOpenGLSurface:NO];
+    if(other){
+        [other setView:first];
+        ok=ok&&[NSOpenGLContext currentContext]==primary;
+        [other makeCurrentContext];
+        int w=0,h=0;size(other,&w,&h);
+        BOOL current=[NSOpenGLContext currentContext]==other;
+        ok=ok&&current&&w==24&&h==20;
+        if(current){
+            GLuint actual[4]={0};
+            glBindBuffer(GL_ARRAY_BUFFER,buffer);
+            glGetBufferSubData(GL_ARRAY_BUFFER,0,sizeof(actual),actual);
+            ok=ok&&glGetError()==GL_NO_ERROR&&!memcmp(actual,initial,sizeof(actual));
+            [primary update];
+            ok=ok&&[NSOpenGLContext currentContext]==other;
+            [other setView:second];size(other,&w,&h);
+            ok=ok&&[NSOpenGLContext currentContext]==other&&w==31&&h==19;
+            glViewport(0,0,w,h);glDrawBuffer(GL_BACK);glReadBuffer(GL_BACK);
+            glClearColor(0,1,0,1);glClear(GL_COLOR_BUFFER_BIT);
+            unsigned char px[4]={0};glReadPixels(w-1,h-1,1,1,GL_RGBA,GL_UNSIGNED_BYTE,px);
+            ok=ok&&glGetError()==GL_NO_ERROR&&px[0]<10&&px[1]>240&&px[2]<10&&px[3]>240;
+            glBindBuffer(GL_ARRAY_BUFFER,0);
+        }
+        [NSOpenGLContext clearCurrentContext];
+        ok=ok&&[NSOpenGLContext currentContext]==nil;
+        [primary makeCurrentContext];
+        ok=ok&&[NSOpenGLContext currentContext]==primary;
+        [other clearDrawable];
+        ok=ok&&[NSOpenGLContext currentContext]==primary;
+    }else ok=NO;
+    [primary makeCurrentContext];
+    if([NSOpenGLContext currentContext]!=primary)return NO;
+    glBindBuffer(GL_ARRAY_BUFFER,0);
+    if(buffer)glDeleteBuffers(1,&buffer);
+    return glGetError()==GL_NO_ERROR&&ok;
+}
 void TCMacDiagnostics(NSView *view){
     NSMutableString *r=[NSMutableString stringWithString:@"Mac ARM64 + Mesa desktop GL"];
     NSOpenGLPixelFormatAttribute attrs[]={NSOpenGLPFAAccelerated,NSOpenGLPFAClosestPolicy,
@@ -60,6 +105,14 @@ void TCMacDiagnostics(NSView *view){
         NSOpenGLPFAAlphaSize,8,NSOpenGLPFADepthSize,24,NSOpenGLPFAStencilSize,8,
         NSOpenGLPFADoubleBuffer,NSOpenGLPFASampleBuffers,0,0};
     NSOpenGLPixelFormat *fmt=[[NSOpenGLPixelFormat alloc]initWithAttributes:attrs];
+    // Match the real GLFW initialization order: look up the already
+    // registered framework by identifier before context construction.
+    CFBundleRef registered=CFBundleGetBundleWithIdentifier(CFSTR("com.apple.opengl"));
+    NSURL *expected=[NSBundle.mainBundle.privateFrameworksURL URLByAppendingPathComponent:@"OpenGLShim.framework"];
+    NSURL *actual=registered?CFBridgingRelease(CFBundleCopyBundleURL(registered)):nil;
+    BOOL registration=registered&&actual&&[[actual.path stringByStandardizingPath] isEqualToString:[expected.path stringByStandardizingPath]]&&
+        CFBundleGetFunctionPointerForName(registered,CFSTR("glTexBuffer"));
+    [r appendFormat:@"\nGLFW identifier lookup: %@",registration?@"PASS":@"FAIL"];
     NSOpenGLContext *ctx=fmt?[[NSOpenGLContext alloc]initWithFormat:fmt shareContext:nil]:nil;
     if(ctx){
         [ctx setView:view];[ctx makeCurrentContext];
@@ -88,6 +141,9 @@ void TCMacDiagnostics(NSView *view){
         int w=0,h=0;if(size)size(ctx,&w,&h);
         BOOL a=NO,b410=NO,shown=NO,pixels=NO;
         if(version&&w>0&&h>0){
+            BOOL lifecycle=testContextLifecycle(ctx,fmt,size);
+            [r appendFormat:@"\nContext sharing, resize and restore: %@",lifecycle?@"PASS":@"FAIL"];
+            [ctx makeCurrentContext];
             a=desktopDraw(@"150",w,h);b410=desktopDraw(@"410",w,h);
             if(!b410&&a)desktopDraw(@"150",w,h);
             [ctx flushBuffer];shown=present&&present(ctx);

@@ -34,7 +34,9 @@ xcrun --sdk iphoneos clang -target arm64-apple-ios17.0 -std=c11 -Wall -Wextra -W
   mesa/context/desktop-gl.c -o "$T/OpenGLShim.framework/OpenGLShim"
 cp "$T/MesaCore.framework/Info.plist" "$T/OpenGLShim.framework/Info.plist"
 plutil -replace CFBundleExecutable -string OpenGLShim "$T/OpenGLShim.framework/Info.plist"
-plutil -replace CFBundleIdentifier -string com.sky9662.tcmesadiagnostics.OpenGLShim "$T/OpenGLShim.framework/Info.plist"
+plutil -replace CFBundleIdentifier -string com.apple.opengl "$T/OpenGLShim.framework/Info.plist"
+# GLFW looks up this exact identifier, not a custom diagnostic identifier.
+test "$(plutil -extract CFBundleIdentifier raw "$T/OpenGLShim.framework/Info.plist")" = com.apple.opengl
 xcrun otool -l "$T/OpenGLShim.framework/OpenGLShim" | grep -A4 LC_REEXPORT_DYLIB | grep -F @rpath/MesaCore.framework/MesaCore
 xcrun nm -gUj "$T/MesaCore.framework/MesaCore" > "$T/gl-exports.txt"
 xcrun nm -gUj "$T/OpenGLShim.framework/OpenGLShim" > "$T/gl-overrides.txt"
@@ -62,6 +64,7 @@ mkdir -p "$app/ThirdParty"
 cp -R "$kit/licenses" "$kit/source-recipes" "$kit/SOURCES.md" "$kit/SHA256SUMS" "$app/ThirdParty/"
 cp mesa/SOURCES.md "$app/ThirdParty/INTEGRATION.md"
 test ! -e "$app/embedded.mobileprovision"
+test "$(plutil -extract CFBundleIdentifier raw "$app/Frameworks/OpenGLShim.framework/Info.plist")" = com.apple.opengl
 xcrun otool -L "$app/MacProbe" | grep -F @rpath/OpenGLShim.framework/OpenGLShim
 xcrun vtool -show-build "$app/Frameworks/MoltenVK.framework/MoltenVK" | grep -i 'platform IOS'
 (cd "$out" && zip -qry "$GITHUB_WORKSPACE/TCMesaDiagnostics-unsigned.ipa" Payload)

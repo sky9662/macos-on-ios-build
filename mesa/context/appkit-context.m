@@ -3,6 +3,8 @@
 #import <QuartzCore/CAMetalLayer.h>
 #import <QuartzCore/CATransaction.h>
 #import <dlfcn.h>
+#import <objc/runtime.h>
+#import <CoreFoundation/CoreFoundation.h>
 #include <stdlib.h>
 #include <stdint.h>
 #include <math.h>
@@ -17,6 +19,43 @@ extern void (*OSMesaGetProcAddress(const char *))(void);
 enum { TC_BGRA=1, TC_FORMAT=0x22, TC_DEPTH=0x30, TC_STENCIL=0x31,
        TC_PROFILE=0x33, TC_CORE=0x34, TC_MAJOR=0x36, TC_MINOR=0x37,
        TC_ROW_LENGTH=0x10, TC_Y_UP=0x11, TC_UNSIGNED_BYTE=0x1401 };
+// GLFW locates desktop OpenGL by CFBundle identifier before creating a
+// context. Register only our embedded, already linked framework. Keep the
+// reference alive; do not interpose CoreFoundation lookup globally.
+static CFBundleRef tcMesaGLBundle;
+static void TCRegisterMesaGLBundle(void) {
+    if(tcMesaGLBundle)return;
+    CFURLRef base=CFBundleCopyPrivateFrameworksURL(CFBundleGetMainBundle());
+    if(!base)return;
+    CFURLRef url=CFURLCreateCopyAppendingPathComponent(kCFAllocatorDefault,base,CFSTR("OpenGLShim.framework"),true);
+    CFRelease(base);
+    if(!url)return;
+    CFBundleRef candidate=CFBundleCreate(kCFAllocatorDefault,url);
+    CFRelease(url);
+    if(!candidate)return;
+    CFStringRef identifier=CFBundleGetIdentifier(candidate);
+    if(!identifier||!CFEqual(identifier,CFSTR("com.apple.opengl"))||!CFBundleLoadExecutable(candidate)){
+        CFRelease(candidate);return;
+    }
+    tcMesaGLBundle=candidate;
+    CFBundleRef registered=CFBundleGetBundleWithIdentifier(CFSTR("com.apple.opengl"));
+    if(registered!=candidate)NSLog(@"TC Mesa: GLFW identifier registration not confirmed");
+    else NSLog(@"TC Mesa: embedded OpenGL bundle registered");
+}
+static char tcMesaHiDPIKey;
+@interface NSView (TCMesaResolution)
+- (void)setWantsBestResolutionOpenGLSurface:(BOOL)enabled;
+- (BOOL)wantsBestResolutionOpenGLSurface;
+@end
+@implementation NSView (TCMesaResolution)
+- (void)setWantsBestResolutionOpenGLSurface:(BOOL)enabled {
+    objc_setAssociatedObject(self,&tcMesaHiDPIKey,@(enabled),OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+}
+- (BOOL)wantsBestResolutionOpenGLSurface {
+    NSNumber *value=objc_getAssociatedObject(self,&tcMesaHiDPIKey);
+    return value?value.boolValue:YES;
+}
+@end
 @interface NSOpenGLPixelFormat : NSObject
 @property(nonatomic) int major,minor,depth,stencil,wantsDouble;
 - (instancetype)initWithAttributes:(const uint32_t *)attrs;
@@ -45,7 +84,16 @@ enum { TC_BGRA=1, TC_FORMAT=0x22, TC_DEPTH=0x30, TC_STENCIL=0x31,
 - (void)clearDrawable;
 - (BOOL)bindWidth:(int)w height:(int)h;
 @end
+// Context ownership is main-thread-only in this adapter. Derive current
+// object from Mesa's actual current context, not a guessed global selection.
+static NSMapTable<NSValue *,NSOpenGLContext *> *tcMesaContexts;
+static NSValue *tcContextKey(TCOSContext ctx){return [NSValue valueWithPointer:ctx];}
 @implementation NSOpenGLContext
++ (NSOpenGLContext *)currentContext {
+    if(![NSThread isMainThread])return nil;
+    TCOSContext ctx=OSMesaGetCurrentContext();
+    return ctx?[tcMesaContexts objectForKey:tcContextKey(ctx)]:nil;
+}
 - (instancetype)initWithFormat:(NSOpenGLPixelFormat *)format shareContext:(NSOpenGLContext *)share {
     if(!(self=[super init])||!format||![NSThread isMainThread])return nil;
     // Set the real backend before creating the first OSMesa context.
@@ -61,33 +109,43 @@ enum { TC_BGRA=1, TC_FORMAT=0x22, TC_DEPTH=0x30, TC_STENCIL=0x31,
     _device=MTLCreateSystemDefaultDevice();
     _queue=[_device newCommandQueue];
     if(!_queue)return nil;
+    if(!tcMesaContexts)tcMesaContexts=[NSMapTable strongToWeakObjectsMapTable];
+    [tcMesaContexts setObject:self forKey:tcContextKey(_mesa)];
     return self;
 }
 - (BOOL)bindWidth:(int)w height:(int)h {
     if(![NSThread isMainThread]||!_mesa||w<1||h<1||w>8192||h>8192||
        (uint64_t)w*(uint64_t)h*4>128*1024*1024)return NO;
     if(_pixels&&w==_width&&h==_height)
-        return OSMesaMakeCurrent(_mesa,_pixels,TC_UNSIGNED_BYTE,w,h)!=0;
-    if(OSMesaGetCurrentContext()==_mesa) {
-        void (*finish)(void)=OSMesaGetProcAddress("glFinish");
-        if(finish)finish();
-        OSMesaMakeCurrent(NULL,NULL,0,0,0);
-    }
+        return OSMesaGetCurrentContext()==_mesa||
+            (OSMesaMakeCurrent(_mesa,_pixels,TC_UNSIGNED_BYTE,w,h)&&OSMesaGetCurrentContext()==_mesa);
+    // Allocate before disturbing the live drawable. On an allocation
+    // failure the old context and its backing memory remain intact.
     void *next=calloc((size_t)w*(size_t)h,4);
     if(!next)return NO;
+    if(OSMesaGetCurrentContext()==_mesa) {
+        void (*finish)(void)=OSMesaGetProcAddress("glFinish");
+        if(!finish){free(next);return NO;}
+        finish();
+    }
     if(!OSMesaMakeCurrent(_mesa,next,TC_UNSIGNED_BYTE,w,h)){
-        OSMesaMakeCurrent(NULL,NULL,0,0,0);
         free(next);
         return NO;
     }
-    OSMesaPixelStore(TC_ROW_LENGTH,0);OSMesaPixelStore(TC_Y_UP,0);
+    // Once Mesa accepted the pointer, preserve it until a later successful
+    // rebind or destruction, even if current-context verification fails.
     free(_pixels);_pixels=next;_width=w;_height=h;_uploadTexture=nil;
+    if(OSMesaGetCurrentContext()!=_mesa)return NO;
+    OSMesaPixelStore(TC_ROW_LENGTH,0);OSMesaPixelStore(TC_Y_UP,0);
     return YES;
 }
 - (void)setView:(NSView *)view {
+    if(![NSThread isMainThread])return;
     if(_tcView==view&&_layer)return;
-    [self clearDrawable];
-    if(!view||![NSThread isMainThread])return;
+    if(!view){[self clearDrawable];return;}
+    // Replacing the surface must not unbind another context or discard
+    // the previous buffer before a successful resize.
+    [_layer removeFromSuperlayer];_layer=nil;_lastPresent=NO;
     _tcView=view;_layer=[CAMetalLayer layer];_layer.device=_device;
     _layer.pixelFormat=MTLPixelFormatBGRA8Unorm;_layer.framebufferOnly=NO;_layer.opaque=YES;
     [view.hostView.layer addSublayer:_layer];
@@ -97,19 +155,35 @@ enum { TC_BGRA=1, TC_FORMAT=0x22, TC_DEPTH=0x30, TC_STENCIL=0x31,
 - (void)update {
     if(!_layer||!_tcView||![NSThread isMainThread])return;
     UIView *host=_tcView.hostView;
-    CGFloat scale=host.traitCollection.displayScale;if(scale<=0)scale=1;
+    CGFloat scale=_tcView.wantsBestResolutionOpenGLSurface?host.traitCollection.displayScale:1;
+    if(scale<=0)scale=1;
     double w=ceil(host.bounds.size.width*scale),h=ceil(host.bounds.size.height*scale);
     if(!isfinite(w)||!isfinite(h)||w<1||h<1||w>8192||h>8192)return;
-    if(![self bindWidth:(int)w height:(int)h])return;
+    TCOSContext rawPrior=OSMesaGetCurrentContext();
+    NSOpenGLContext *prior=[NSOpenGLContext currentContext];
+    if(rawPrior&&!prior)return; // do not steal an unmanaged Mesa context
+    if(!_pixels||_width!=(int)w||_height!=(int)h){
+        BOOL resized=[self bindWidth:(int)w height:(int)h];
+        BOOL restored=YES;
+        if(prior!=self){
+            if(prior)restored=[prior bindWidth:prior.width height:prior.height];
+            else restored=OSMesaMakeCurrent(NULL,NULL,0,0,0)!=0;
+        }
+        if(!resized||!restored){NSLog(@"TC Mesa resize/restore failed");return;}
+    }
     [CATransaction begin];[CATransaction setDisableActions:YES];
     _layer.frame=host.bounds;_layer.contentsScale=scale;_layer.drawableSize=CGSizeMake(w,h);
     [CATransaction commit];
 }
 - (void)makeCurrentContext {
+    if(![NSThread isMainThread])return;
     if(_layer)[self update];
-    else [self bindWidth:_width?_width:16 height:_height?_height:16];
+    if(![self bindWidth:_width?_width:16 height:_height?_height:16])
+        NSLog(@"TC Mesa makeCurrentContext failed");
 }
-+ (void)clearCurrentContext {OSMesaMakeCurrent(NULL,NULL,0,0,0);}
++ (void)clearCurrentContext {
+    if([NSThread isMainThread])OSMesaMakeCurrent(NULL,NULL,0,0,0);
+}
 - (void)clearDrawable {
     if(OSMesaGetCurrentContext()==_mesa&&_mesa){
         void (*finish)(void)=OSMesaGetProcAddress("glFinish");
@@ -121,7 +195,7 @@ enum { TC_BGRA=1, TC_FORMAT=0x22, TC_DEPTH=0x30, TC_STENCIL=0x31,
 }
 - (void)dealloc {
     [self clearDrawable];
-    if(_mesa)OSMesaDestroyContext(_mesa);
+    if(_mesa){[tcMesaContexts removeObjectForKey:tcContextKey(_mesa)];OSMesaDestroyContext(_mesa);}
     free(_pixels);
 }
 - (void)flushBuffer {
