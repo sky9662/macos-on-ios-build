@@ -19,4 +19,4 @@ Download the direct diagnostic IPA from Releases, then use your own valid signin
 
 ### Diagnostic app identity
 
-TC Mesa retains the TC Diagnostics application bundle identifier `com.sky9662.tcdiagnostics` so renderer upgrades can replace the existing diagnostic when signed with the same identity and signing-tool configuration. Earlier Mesa releases used `com.sky9662.tcmesadiagnostics` and may be treated as separate apps. The Mesa build checks the final IPA identifier; framework identifiers remain unchanged.
+TC Mesa uses the stable application bundle identifier `com.sky9662.tcmesadiagnostics`, already registered by existing Mesa testers. Do not change it between releases. The final IPA identifier is checked during CI. The earlier TC Diagnostics app has a separate identifier; framework identifiers remain unchanged.
