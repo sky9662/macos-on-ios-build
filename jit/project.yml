@@ -1,0 +1,69 @@
+name: TCJITHost
+options:
+  deploymentTarget:
+    iOS: "26.0"
+settings:
+  base:
+    SWIFT_VERSION: "5.0"
+    GENERATE_INFOPLIST_FILE: YES
+    CODE_SIGNING_ALLOWED: NO
+    MARKETING_VERSION: "0.1"
+    CURRENT_PROJECT_VERSION: "1"
+targets:
+  TCJITHost:
+    type: application
+    platform: iOS
+    sources:
+      - Host
+      - Shared
+    dependencies:
+      - target: TCJITHelper
+        embed: true
+      - sdk: Security.framework
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: com.sky9662.tcjithost
+        SWIFT_OBJC_BRIDGING_HEADER: Host/Authorization.h
+        INFOPLIST_KEY_UILaunchScreen_Generation: YES
+    info:
+      path: HostInfo.plist
+      properties:
+        CFBundleDisplayName: TC JIT Diagnostics
+        NSLocalNetworkUsageDescription: Find the paired device over LocalDevVPN for authorized debugger preparation.
+        NSBonjourServices: ["_remotepairing._tcp"]
+        UIFileSharingEnabled: false
+        LSSupportsOpeningDocumentsInPlace: false
+        UILaunchScreen: {}
+        UISupportedInterfaceOrientations: [UIInterfaceOrientationPortrait, UIInterfaceOrientationPortraitUpsideDown, UIInterfaceOrientationLandscapeLeft, UIInterfaceOrientationLandscapeRight]
+        UISupportedInterfaceOrientations~ipad: [UIInterfaceOrientationPortrait, UIInterfaceOrientationPortraitUpsideDown, UIInterfaceOrientationLandscapeLeft, UIInterfaceOrientationLandscapeRight]
+  TCJITHelper:
+    type: app-extension
+    platform: iOS
+    sources:
+      - Helper
+      - Shared
+    dependencies:
+      - framework: StikJIT.xcframework
+        embed: true
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: com.sky9662.tcjithost.helper
+        APPLICATION_EXTENSION_API_ONLY: YES
+        LD_RUNPATH_SEARCH_PATHS: "$(inherited) @executable_path/Frameworks @executable_path/../../Frameworks"
+    info:
+      path: HelperInfo.plist
+      properties:
+        CFBundleDisplayName: TC JIT Helper
+        CFBundlePackageType: "XPC!"
+        NSExtension:
+          NSExtensionPointIdentifier: com.apple.ar.viewer
+          NSExtensionPrincipalClass: TCClassicHelperHandler
+          NSExtensionContextClass: NSExtensionContext
+          NSExtensionContextHostClass: NSExtensionContext
+          NSExtensionAttributes:
+            NSExtensionActivationRule: FALSEPREDICATE
+schemes:
+  TCJITHost:
+    build:
+      targets:
+        TCJITHost: all

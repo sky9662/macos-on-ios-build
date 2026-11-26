@@ -1,0 +1,13 @@
+*.ipa
+*.app/
+*.dylib
+*.zip
+*.p12
+*.mobileprovision
+*.p8
+*.log
+*.manifest
+__pycache__/
+/inputs/
+/game/
+/artifacts/

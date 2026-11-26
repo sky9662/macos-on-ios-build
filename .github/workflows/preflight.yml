@@ -1,0 +1,203 @@
+name: ARM iOS compatibility probes
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'probe/**'
+      - 'jit/**'
+      - 'diagnostics/**'
+      - 'scripts/**'
+      - 'licenses/**'
+      - '.github/workflows/preflight.yml'
+  workflow_dispatch:
+permissions:
+  contents: read
+concurrency:
+  group: tc-arm-probe
+  cancel-in-progress: false
+jobs:
+  jit-helper:
+    if: github.repository == 'sky9662/macos-on-ios-build' && github.event.repository.private == false
+    runs-on: xcode-27
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - name: Validate XcodeGen project structure
+        run: python3 scripts/check_jit_project.py jit/project.yml
+      - name: Verify and compile StikJIT host and independent extension
+        run: bash scripts/build_jit_host.sh
+      - uses: actions/upload-artifact@v4
+        with:
+          name: tc-jit-readiness-unsigned
+          path: TCJITReadiness-unsigned.ipa
+          if-no-files-found: error
+  jit-source-allocator:
+    if: github.repository == 'sky9662/macos-on-ios-build' && github.event.repository.private == false
+    runs-on: xcode-27
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - name: Validate isolated allocator layout and iOS callback API
+        run: |
+          set -euxo pipefail
+          test "$(uname -m)" = arm64
+          xcodebuild -version
+          xcrun --sdk iphoneos --show-sdk-version
+          xcrun --sdk macosx clang -std=c11 -Wall -Wextra -Werror scripts/test_jit_layout.c -o "$RUNNER_TEMP/tc-jit-layout"
+          "$RUNNER_TEMP/tc-jit-layout"
+          xcrun --sdk macosx clang -std=c11 -Wall -Wextra -Werror scripts/test_jit_region.c -o "$RUNNER_TEMP/tc-jit-region"
+          "$RUNNER_TEMP/tc-jit-region"
+          xcrun --sdk iphoneos clang -target arm64-apple-ios26.0 -Wall -Wextra -Werror -c jit/Allocator/source_probe.c -o "$RUNNER_TEMP/tc-jit-source-probe.o"
+          xcrun nm -u "$RUNNER_TEMP/tc-jit-source-probe.o" | grep -F _pthread_jit_write_with_callback_np
+          if xcrun nm -u "$RUNNER_TEMP/tc-jit-source-probe.o" | grep -F _pthread_jit_write_protect_np; then exit 1; fi
+  gl-probe:
+    if: github.repository == 'sky9662/macos-on-ios-build' && github.event.repository.private == false
+    runs-on: xcode-27
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - name: Verify ARM and iOS SDK
+        run: |
+          test "$(uname -m)" = arm64
+          xcodebuild -version
+          xcrun --sdk iphoneos --show-sdk-version
+          xcrun --sdk macosx clang -std=c11 -Wall -Wextra -Werror scripts/test_input_math.c -o "$RUNNER_TEMP/tc-input-math"
+          "$RUNNER_TEMP/tc-input-math"
+          xcrun --sdk macosx clang -std=c11 -Wall -Wextra -Werror scripts/test_gl_drawable.c -o "$RUNNER_TEMP/tc-gl-drawable"
+          "$RUNNER_TEMP/tc-gl-drawable"
+          xcrun --sdk macosx clang -std=c11 -Wall -Wextra -Werror scripts/test_gl_index.c -o "$RUNNER_TEMP/tc-gl-index"
+          "$RUNNER_TEMP/tc-gl-index"
+          python3 -m py_compile scripts/preflight.py
+          python3 scripts/test_tc_jit_audit.py
+      - name: Compile real GLES3 triangle probe
+        run: |
+          set -euxo pipefail
+          mkdir -p Payload/TCGLProbe.app
+          xcrun --sdk iphoneos clang -target arm64-apple-ios17.0 -fobjc-arc -framework UIKit -framework Foundation -framework CoreGraphics -framework GLKit -framework OpenGLES probe/main.m -o Payload/TCGLProbe.app/TCGLProbe
+          cp probe/Info.plist Payload/TCGLProbe.app/
+          plutil -lint Payload/TCGLProbe.app/Info.plist
+          xcrun lipo -verify_arch arm64 Payload/TCGLProbe.app/TCGLProbe
+          xcrun otool -L Payload/TCGLProbe.app/TCGLProbe | grep -F CoreGraphics.framework
+          xcrun vtool -show-build Payload/TCGLProbe.app/TCGLProbe
+          zip -qr TCGLProbe-unsigned.ipa Payload
+          unzip -t TCGLProbe-unsigned.ipa
+      - uses: actions/upload-artifact@v4
+        with:
+          name: tc-gl-probe-unsigned
+          path: TCGLProbe-unsigned.ipa
+          if-no-files-found: error
+  upstream-probe:
+    if: github.repository == 'sky9662/macos-on-ios-build' && github.event.repository.private == false
+    runs-on: xcode-27
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: actions/checkout@v4
+        with:
+          repository: zorrobyte/macos-on-ios-public
+          ref: c2562a333d4de4c08da4ceb4a4f1485bddb84e04
+          path: upstream
+          persist-credentials: false
+      - name: Compile upstream mac app and iOS shim only
+        env:
+          UDID: compile-only
+          TEAM: compile-only
+          IDENTITY: compile-only
+        run: |
+          set -euxo pipefail
+          test "$(uname -m)" = arm64
+          xcodebuild -version
+          export T="$RUNNER_TEMP/macos-on-ios"
+          python3 scripts/patch_upstream_probe.py upstream/probe/build.sh
+          bash -n upstream/probe/build.sh
+          cd upstream/probe
+          bash build.sh mac shim
+          xcrun lipo -verify_arch arm64 "$T/MacProbe.app/Contents/MacOS/MacProbe"
+          xcrun lipo -verify_arch arm64 "$T/AppKitShim.framework/AppKitShim"
+          xcrun otool -L "$T/AppKitShim.framework/AppKitShim" | grep -F GameController.framework
+      - name: Convert and package macOS-built Metal probe for device signing
+        run: |
+          set -euxo pipefail
+          python3 -m py_compile scripts/package_mac_probe.py
+          python3 scripts/package_mac_probe.py "$RUNNER_TEMP/macos-on-ios" upstream "$RUNNER_TEMP/tc-mac-probe"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: tc-mac-probe-unsigned
+          path: ${{ runner.temp }}/tc-mac-probe/TCMacProbe-unsigned.ipa
+          if-no-files-found: error
+      - name: Build integrated Mac desktop GL and device diagnostics
+        env:
+          UDID: compile-only
+          TEAM: compile-only
+          IDENTITY: compile-only
+        run: |
+          set -euxo pipefail
+          python3 -m py_compile scripts/prepare_diagnostics.py scripts/package_mac_probe.py
+          python3 scripts/prepare_diagnostics.py upstream
+          bash -n upstream/probe/build.sh
+          export T="$RUNNER_TEMP/tc-integrated-build"
+          (cd upstream/probe && bash build.sh mac shim)
+          FW="$T/OpenGLShim.framework"
+          mkdir -p "$FW"
+          xcrun --sdk iphoneos clang -target arm64-apple-ios17.0 -fobjc-arc -dynamiclib -install_name @rpath/OpenGLShim.framework/OpenGLShim -framework Foundation -Wl,-reexport_framework,OpenGLES diagnostics/opengl.m -o "$FW/OpenGLShim"
+          xcrun nm -gUj "$FW/OpenGLShim" > "$RUNNER_TEMP/tc-gl-symbols.txt"
+          for symbol in glDrawBuffer glDrawBuffers glReadBuffer glGetIntegerv glMapBuffer glDrawElementsBaseVertex glPolygonMode glGetError; do
+            grep -Fx "_$symbol" "$RUNNER_TEMP/tc-gl-symbols.txt"
+          done
+          cp "$T/AppKitShim.framework/Info.plist" "$FW/Info.plist"
+          plutil -replace CFBundleExecutable -string OpenGLShim "$FW/Info.plist"
+          plutil -replace CFBundleIdentifier -string com.sky9662.tcdiagnostics.openglshim "$FW/Info.plist"
+          xcrun otool -L "$FW/OpenGLShim" | grep -F OpenGLES.framework
+          python3 scripts/package_mac_probe.py "$T" upstream "$RUNNER_TEMP/tc-integrated" --diagnostics
+      - uses: actions/upload-artifact@v4
+        with:
+          name: tc-compatibility-diagnostics-unsigned
+          path: ${{ runner.temp }}/tc-integrated/TCCompatibilityDiagnostics-unsigned.ipa
+          if-no-files-found: error
+  publish-diagnostics:
+    needs: [gl-probe, upstream-probe]
+    if: github.repository == 'sky9662/macos-on-ios-build' && github.event.repository.private == false
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: tc-compatibility-diagnostics-unsigned
+          path: release
+      - name: Publish source-only diagnostic IPA in public build repository
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          TAG: tc-diagnostics-${{ github.run_id }}-${{ github.run_attempt }}
+        run: |
+          set -euxo pipefail
+          test "$(gh repo view "$GH_REPO" --json isPrivate --jq .isPrivate)" = false
+          test "$GH_REPO" = sky9662/macos-on-ios-build
+          gh release create "$TAG" release/TCCompatibilityDiagnostics-unsigned.ipa --target "$GITHUB_SHA" --title "TC compatibility diagnostics $TAG" --notes "Source-only unsigned compatibility probe. Not the game. Sign locally. No commercial game files." --prerelease
+
+  publish-jit-readiness:
+    needs: [jit-helper]
+    if: github.repository == 'sky9662/macos-on-ios-build' && github.event.repository.private == false
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: tc-jit-readiness-unsigned
+          path: jit-release
+      - name: Publish distinct diagnostic IPA only (public source-only build)
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          TAG: tc-jit-readiness-${{ github.run_id }}-${{ github.run_attempt }}
+        run: |
+          set -euxo pipefail
+          test "$(gh repo view "$GH_REPO" --json isPrivate --jq .isPrivate)" = false
+          test "$GH_REPO" = sky9662/macos-on-ios-build
+          gh release create "$TAG" jit-release/TCJITReadiness-unsigned.ipa --target "$GITHUB_SHA" --title "TC JIT readiness $TAG" --notes "Unsigned diagnostic only; no game code, credentials or profiles. StikJIT 2.0.1 (MPL-2.0) source: https://github.com/StikDebug/StikJIT/tree/2.0.1 . This release is a preparation-only diagnostic; no debugger attachment or game execution. Device-specific behavior remains unverified for this build." --prerelease

@@ -1,0 +1,151 @@
+name: Windows-local game conversion preflight
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'scripts/jit_readiness.py'
+      - 'scripts/tc_jit_audit.py'
+      - 'scripts/audit_mac_bundle.py'
+      - 'scripts/test_audit_mac_bundle.py'
+      - 'scripts/test_tc_jit_audit.py'
+      - 'scripts/test_jit_readiness.py'
+      - 'scripts/tc_windows.py'
+      - 'scripts/package_tc_local.py'
+      - 'diagnostics/display.m'
+      - 'diagnostics/ui_compat.m'
+      - 'diagnostics/cursor.m'
+      - 'diagnostics/panels.m'
+      - 'diagnostics/keyboard.m'
+      - 'diagnostics/events.m'
+      - 'diagnostics/controls.m'
+      - 'diagnostics/input_math.h'
+      - 'diagnostics/gl_drawable.h'
+      - 'diagnostics/gl_index.h'
+      - 'scripts/test_gl_index.c'
+      - 'diagnostics/opengl.m'
+      - 'diagnostics/mac.m'
+      - 'scripts/test_gl_drawable.c'
+      - 'scripts/test_input_math.c'
+      - 'scripts/prepare_diagnostics.py'
+      - 'scripts/test_tc_windows.py'
+      - 'scripts/test_tc_kit.py'
+      - 'scripts/test_tc_package.py'
+      - 'scripts/build_sdk_catalog.py'
+      - '.github/workflows/windows-preflight.yml'
+  workflow_dispatch:
+permissions:
+  contents: read
+concurrency:
+  group: tc-windows-converter
+  cancel-in-progress: false
+jobs:
+  windows-unit:
+    if: github.repository == 'sky9662/macos-on-ios-build' && github.event.repository.private == false
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - run: python scripts/test_jit_readiness.py
+      - run: python scripts/test_tc_jit_audit.py
+      - run: python scripts/test_audit_mac_bundle.py
+      - run: python scripts/test_tc_windows.py
+      - run: python scripts/test_tc_package.py
+  mac-real:
+    if: github.repository == 'sky9662/macos-on-ios-build' && github.event.repository.private == false
+    runs-on: xcode-27
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/checkout@v4
+        with:
+          repository: zorrobyte/macos-on-ios-public
+          ref: c2562a333d4de4c08da4ceb4a4f1485bddb84e04
+          path: upstream
+          persist-credentials: false
+      - name: Validate real Mach-O conversion and generate SDK export catalog
+        env:
+          UDID: compile-only
+          TEAM: compile-only
+          IDENTITY: compile-only
+        run: |
+          set -euxo pipefail
+          python3 scripts/test_tc_windows.py
+          python3 scripts/test_tc_jit_audit.py
+          python3 scripts/test_audit_mac_bundle.py
+          xcrun --sdk macosx clang -std=c11 -Wall -Wextra -Werror scripts/test_input_math.c -o "$RUNNER_TEMP/tc-input-math"
+          "$RUNNER_TEMP/tc-input-math"
+          xcrun --sdk macosx clang -std=c11 -Wall -Wextra -Werror scripts/test_gl_drawable.c -o "$RUNNER_TEMP/tc-gl-drawable"
+          "$RUNNER_TEMP/tc-gl-drawable"
+          xcrun --sdk macosx clang -std=c11 -Wall -Wextra -Werror scripts/test_gl_index.c -o "$RUNNER_TEMP/tc-gl-index"
+          "$RUNNER_TEMP/tc-gl-index"
+          python3 scripts/patch_upstream_probe.py upstream/probe/build.sh
+          python3 scripts/prepare_diagnostics.py upstream
+          export T="$RUNNER_TEMP/tc-local-kit"
+          (cd upstream/probe && bash build.sh mac shim)
+          FW="$T/OpenGLShim.framework"
+          mkdir -p "$FW"
+          xcrun --sdk iphoneos clang -target arm64-apple-ios17.0 -fobjc-arc -dynamiclib -install_name @rpath/OpenGLShim.framework/OpenGLShim -framework Foundation -Wl,-reexport_framework,OpenGLES diagnostics/opengl.m -o "$FW/OpenGLShim"
+          xcrun nm -gUj "$FW/OpenGLShim" > "$RUNNER_TEMP/tc-gl-symbols.txt"
+          for symbol in glDrawBuffer glDrawBuffers glReadBuffer glGetIntegerv glMapBuffer glDrawElementsBaseVertex glPolygonMode glGetError; do
+            grep -Fx "_$symbol" "$RUNNER_TEMP/tc-gl-symbols.txt"
+          done
+          cp "$T/AppKitShim.framework/Info.plist" "$FW/Info.plist"
+          plutil -replace CFBundleExecutable -string OpenGLShim "$FW/Info.plist"
+          plutil -replace CFBundleIdentifier -string com.apple.opengl "$FW/Info.plist"
+          plutil -lint "$FW/Info.plist"
+          HIT="$T/HIToolboxShim.framework"
+          mkdir -p "$HIT"
+          xcrun --sdk iphoneos clang -target arm64-apple-ios17.0 -fobjc-arc -dynamiclib -install_name @rpath/HIToolboxShim.framework/HIToolboxShim -framework Foundation diagnostics/keyboard.m -o "$HIT/HIToolboxShim"
+          cp "$FW/Info.plist" "$HIT/Info.plist"
+          plutil -replace CFBundleExecutable -string HIToolboxShim "$HIT/Info.plist"
+          plutil -replace CFBundleIdentifier -string com.apple.HIToolbox "$HIT/Info.plist"
+          plutil -lint "$HIT/Info.plist"
+          mkdir kit
+          python3 scripts/build_sdk_catalog.py upstream "$T" kit/ios-sdk-exports.json
+          cp scripts/tc_windows.py scripts/package_tc_local.py scripts/tc_jit_audit.py scripts/audit_mac_bundle.py kit/
+          mkdir kit/Frameworks
+          cp -R "$T/AppKitShim.framework" "$T/CocoaShim.framework" "$T/OpenGLShim.framework" "$T/HIToolboxShim.framework" kit/Frameworks/
+          cp upstream/shim/Info-ios.plist kit/
+          cp upstream/LICENSE kit/UPSTREAM-LICENSE.txt
+          python3 -m py_compile kit/tc_windows.py kit/package_tc_local.py kit/tc_jit_audit.py kit/audit_mac_bundle.py
+          rm -rf kit/__pycache__
+          for name in AppKitShim CocoaShim OpenGLShim HIToolboxShim; do
+            fw="kit/Frameworks/$name.framework"
+            test "$(plutil -extract CFBundleExecutable raw "$fw/Info.plist")" = "$name"
+            xcrun vtool -show-build "$fw/$name" | grep -i "platform IOS"
+            xcrun lipo -verify_arch arm64 "$fw/$name"
+          done
+          PYTHONPATH=scripts python3 scripts/test_tc_kit.py kit
+          PYTHONPATH=scripts python3 scripts/test_tc_package.py kit
+          PYTHONPATH=scripts python3 -c 'from tc_windows import *; p=pathlib.Path(sys.argv[1]); c=json.loads(pathlib.Path("kit/ios-sdk-exports.json").read_text()); raw=p.read_bytes(); pathlib.Path("converted-probe").write_bytes(convert(raw,c["mapping"])); assert inspect(raw)["platforms"]==[1]' "$T/MacProbe.app/Contents/MacOS/MacProbe"
+          xcrun vtool -show-build converted-probe | grep -i 'platform IOS'
+          xcrun otool -L converted-probe | grep -F OpenGLShim.framework
+          xcrun lipo -verify_arch arm64 converted-probe
+          xcrun nm -gUj kit/Frameworks/AppKitShim.framework/AppKitShim > "$RUNNER_TEMP/tc-appkit-symbols.txt"
+          grep -Fx _CGDisplayCopyDisplayMode "$RUNNER_TEMP/tc-appkit-symbols.txt"
+          for symbol in NSColor NSPasteboard NSTrackingArea NSMenu NSMenuItem NSBitmapImageRep NSImage NSCursor NSOpenPanel NSSavePanel; do
+            grep -Fx "_OBJC_CLASS_\$_$symbol" "$RUNNER_TEMP/tc-appkit-symbols.txt"
+          done
+          for symbol in CGWarpMouseCursorPosition CGDisplayMoveCursorToPoint CGAssociateMouseAndMouseCursorPosition CGDisplayIsAsleep CGDisplayUnitNumber CGDisplayVendorNumber CGDisplayModelNumber CGOpenGLDisplayMaskToDisplayID CGDisplayScreenSize; do
+            grep -Fx "_$symbol" "$RUNNER_TEMP/tc-appkit-symbols.txt"
+          done
+          for symbol in CGDisplayGammaTableCapacity CGGetDisplayTransferByTable CGSetDisplayTransferByTable CGAcquireDisplayFadeReservation CGReleaseDisplayFadeReservation CGDisplayFade IODisplayCreateInfoDictionary; do
+            grep -Fx "_$symbol" "$RUNNER_TEMP/tc-appkit-symbols.txt"
+          done
+          for symbol in CGEventSourceCreate CGEventSourceSetLocalEventsSuppressionInterval UCKeyTranslate NSTextInputContextKeyboardSelectionDidChangeNotification; do
+            grep -Fx "_$symbol" "$RUNNER_TEMP/tc-appkit-symbols.txt"
+          done
+          xcrun nm -gUj "$HIT/HIToolboxShim" > "$RUNNER_TEMP/tc-hit-symbols.txt"
+          for symbol in TISCopyCurrentKeyboardLayoutInputSource TISGetInputSourceProperty kTISPropertyUnicodeKeyLayoutData UCKeyTranslate; do
+            grep -Fx "_$symbol" "$RUNNER_TEMP/tc-hit-symbols.txt"
+          done
+          for symbol in NSCalibratedRGBColorSpace NSPasteboardTypeString NSPasteboardURLReadingFileURLsOnlyKey NSURLPboardType; do
+            grep -Fx "_$symbol" "$RUNNER_TEMP/tc-appkit-symbols.txt"
+          done
+      - uses: actions/upload-artifact@v4
+        with:
+          name: tc-windows-local-preflight
+          path: kit/
+          if-no-files-found: error
