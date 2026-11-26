@@ -189,6 +189,12 @@ static NSValue *tcContextKey(TCOSContext ctx){return [NSValue valueWithPointer:c
     NSString *vk=[NSBundle.mainBundle.privateFrameworksPath stringByAppendingPathComponent:@"MoltenVK.framework/MoltenVK"];
     if(![[NSFileManager defaultManager] isReadableFileAtPath:vk]){[tcInitReport appendString:@"\nMoltenVK file: FAIL"];return nil;}
     setenv("GALLIUM_DRIVER","zink",1);
+    // Match the pinned BCD Zink initialization before the first context.
+    // Metal lacks native geometry shaders; this is a compatibility override,
+    // not a guarantee that every OpenGL 4.1 feature is implemented.
+    setenv("MESA_GL_VERSION_OVERRIDE","4.1",0);
+    setenv("MESA_GLSL_VERSION_OVERRIDE","410",0);
+    [tcInitReport appendFormat:@"\nGL override: %s / GLSL %s",getenv("MESA_GL_VERSION_OVERRIDE"),getenv("MESA_GLSL_VERSION_OVERRIDE")];
     setenv("ZINK_VULKAN_LIBRARY",vk.fileSystemRepresentation,1);
     setenv("MVK_CONFIG_LOG_LEVEL","1",0);
     if(!tcVKHandle)tcVKHandle=dlopen(vk.fileSystemRepresentation,RTLD_NOW|RTLD_LOCAL);

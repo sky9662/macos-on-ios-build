@@ -41,3 +41,6 @@ Run 45807741724 succeeded both jobs (artifact 15110731827). User requested reuse
 
 ## Round 51 physical device failure / round 52 initialization diagnostics
 User device: GLFW identifier lookup PASS, OSMesa context creation FAIL. Previous message conflated pixel format, library, OSMesa and Metal queue failures. Report each stage, explicitly load embedded MoltenVK, probe Vulkan instance and physical device count, and test 4.1 if 3.2 fails. No assertion of root cause or runtime success. Keep registered TC Mesa app ID. No pairing/JIT change.
+
+## Round 52 device result / round 53 BCD context compatibility settings
+Run 45820202550 succeeded. Physical device: pixel format and MoltenVK load PASS, Vulkan instance result 0, one GPU, OSMesa 3.2 and 4.1 FAIL. Pinned BCD opengl_ios.c explicitly sets MESA_GL_VERSION_OVERRIDE=4.1 and MESA_GLSL_VERSION_OVERRIDE=410 before first context because Metal lacks native geometry shaders and Zink may otherwise reject core profiles above 3.1. Apply the same environment settings and report them on device; this does not implement missing features or establish root cause until retested. Preserve bundle ID and existing renderer/shader tests. Source: https://github.com/thebcd69/bcd-games/blob/8c784fe01359ece82158567676948628f5f41099/build/win32u-unix/opengl_ios.c
