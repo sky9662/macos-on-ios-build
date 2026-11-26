@@ -44,6 +44,8 @@ jobs:
           bash -n bcd-recipes/build/mesa-ios/build.sh
           brew install bison flex pkgconf
           printf '%s\n' "$(brew --prefix bison)/bin" "$(brew --prefix flex)/bin" >> "$GITHUB_PATH"
+      - name: Preflight Mesa endian detection with iOS SDK
+        run: bash mesa/prepare-mesa.sh bcd-recipes
       - name: Build pinned MoltenVK for iOS
         env:
           MOLTENVK_JOBS: '3'

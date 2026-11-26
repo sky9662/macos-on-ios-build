@@ -1,0 +1,22 @@
+--- a/src/util/u_endian.h
++++ b/src/util/u_endian.h
+@@ -27,7 +27,18 @@
+ #ifndef U_ENDIAN_H
+ #define U_ENDIAN_H
+ 
+-#ifdef HAVE_ENDIAN_H
++/* On Apple targets the SDK may provide endian.h while hiding its legacy
++ * names in strict C11 mode. Clang's target byte order remains available. */
++#if defined(__APPLE__) && defined(__BYTE_ORDER__) && \
++    defined(__ORDER_LITTLE_ENDIAN__) && defined(__ORDER_BIG_ENDIAN__)
++# if __BYTE_ORDER__ == __ORDER_LITTLE_ENDIAN__
++#  define UTIL_ARCH_LITTLE_ENDIAN 1
++#  define UTIL_ARCH_BIG_ENDIAN 0
++# elif __BYTE_ORDER__ == __ORDER_BIG_ENDIAN__
++#  define UTIL_ARCH_LITTLE_ENDIAN 0
++#  define UTIL_ARCH_BIG_ENDIAN 1
++# endif
++#elif defined(HAVE_ENDIAN_H)
+ #include <endian.h>
+ 
+ /* glibc */

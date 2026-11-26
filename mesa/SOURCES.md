@@ -22,3 +22,7 @@ runtime validation. Phase 2: implement NSOpenGLContext / desktop symbol
 resolution and Metal presentation using OSMesa; then validate a real shader
 draw/read on device. Preserve the existing GLES backend as a fallback.
 No change to game JIT, security, or packaging gates.
+
+## Round 44 failure / round 45 correction
+Run 45797917173: MoltenVK succeeded; Mesa ninja stopped at 474/928 compiling generated program_lex.yy.c. The compiler invocation included -std=c11, -DHAVE_ENDIAN_H, iPhoneOS27.1.sdk and arm64. Mesa 25.0.7 src/util/u_endian.h line 93 rejected unset UTIL_ARCH_LITTLE_ENDIAN / UTIL_ARCH_BIG_ENDIAN. The header prioritizes HAVE_ENDIAN_H over the Apple branch and only tests legacy aliases there. Fix: prefer Clang target byte-order macros on Apple targets, retaining the existing generic/Apple fallbacks and final consistency check. No hardcoded architecture override or weakened warning flags. Download and SHA256-check the pinned tarball early; dry-run/apply the patch to the exact header and compile the strict C11/C++17 regression with HAVE_ENDIAN_H before building MoltenVK. Then copy the patch into the disposable BCD recipe's existing numbered patch series, retaining it with the build's source recipes. No change to upstream repositories or existing GLES/JIT workflow. Actual successful full Mesa build remains unverified.
+Reference header: https://github.com/chaotic-cx/mesa-mirror/blob/mesa-25.0.7/src/util/u_endian.h
