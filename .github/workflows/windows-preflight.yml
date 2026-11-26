@@ -21,6 +21,8 @@ on:
       - 'diagnostics/input_math.h'
       - 'diagnostics/gl_drawable.h'
       - 'diagnostics/gl_index.h'
+      - 'diagnostics/gl_texel_layout.h'
+      - 'scripts/test_gl_texel_layout.c'
       - 'scripts/test_gl_index.c'
       - 'diagnostics/opengl.m'
       - 'diagnostics/mac.m'
@@ -80,6 +82,8 @@ jobs:
           "$RUNNER_TEMP/tc-gl-drawable"
           xcrun --sdk macosx clang -std=c11 -Wall -Wextra -Werror scripts/test_gl_index.c -o "$RUNNER_TEMP/tc-gl-index"
           "$RUNNER_TEMP/tc-gl-index"
+          xcrun --sdk macosx clang -std=c11 -Wall -Wextra -Werror scripts/test_gl_texel_layout.c -o "$RUNNER_TEMP/tc-gl-texel-layout"
+          "$RUNNER_TEMP/tc-gl-texel-layout"
           python3 scripts/patch_upstream_probe.py upstream/probe/build.sh
           python3 scripts/prepare_diagnostics.py upstream
           export T="$RUNNER_TEMP/tc-local-kit"
@@ -88,7 +92,7 @@ jobs:
           mkdir -p "$FW"
           xcrun --sdk iphoneos clang -target arm64-apple-ios17.0 -fobjc-arc -dynamiclib -install_name @rpath/OpenGLShim.framework/OpenGLShim -framework Foundation -Wl,-reexport_framework,OpenGLES diagnostics/opengl.m -o "$FW/OpenGLShim"
           xcrun nm -gUj "$FW/OpenGLShim" > "$RUNNER_TEMP/tc-gl-symbols.txt"
-          for symbol in glDrawBuffer glDrawBuffers glReadBuffer glGetIntegerv glMapBuffer glDrawElementsBaseVertex glPolygonMode glGetError; do
+          for symbol in glDrawBuffer glDrawBuffers glReadBuffer glGetIntegerv glMapBuffer glDrawElementsBaseVertex glPolygonMode glGetError glTexBuffer TCUploadLinearTexture2D; do
             grep -Fx "_$symbol" "$RUNNER_TEMP/tc-gl-symbols.txt"
           done
           cp "$T/AppKitShim.framework/Info.plist" "$FW/Info.plist"

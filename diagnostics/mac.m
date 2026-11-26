@@ -137,6 +137,102 @@ static BOOL tcTextureBufferAdvertised(void) {
     }
     return NO;
 }
+// Verify the real GLES3 fallback with two rows, a partial tail, and an
+// updated texel. Uses an explicitly adapted shader, not arbitrary game GLSL.
+static BOOL tcTestLinearTexture(void) {
+    typedef int (*UploadFn)(GLuint,GLuint,GLenum,size_t,size_t);
+    NSString *path=[[NSBundle.mainBundle privateFrameworksPath] stringByAppendingPathComponent:@"OpenGLShim.framework/OpenGLShim"];
+    void *lib=dlopen(path.fileSystemRepresentation,RTLD_NOW|RTLD_LOCAL);
+    UploadFn upload=lib?(UploadFn)dlsym(lib,"TCUploadLinearTexture2D"):NULL;
+    if(!upload){if(lib)dlclose(lib);return NO;}
+    GLint oldRead=0,oldDraw=0,oldTexture=0,oldPBO=0,oldVAO=0,oldVBO=0,oldProgram=0,oldActive=0,oldRow=0,viewport[4]={0};
+    glGetIntegerv(GL_READ_FRAMEBUFFER_BINDING,&oldRead);
+    glGetIntegerv(GL_DRAW_FRAMEBUFFER_BINDING,&oldDraw);
+    glGetIntegerv(GL_ACTIVE_TEXTURE,&oldActive);glActiveTexture(GL_TEXTURE0);
+    glGetIntegerv(GL_TEXTURE_BINDING_2D,&oldTexture);
+    glGetIntegerv(GL_PIXEL_UNPACK_BUFFER_BINDING,&oldPBO);
+    glGetIntegerv(GL_UNPACK_ROW_LENGTH,&oldRow);
+    glGetIntegerv(GL_VERTEX_ARRAY_BINDING,&oldVAO);
+    glGetIntegerv(GL_ARRAY_BUFFER_BINDING,&oldVBO);
+    glGetIntegerv(GL_CURRENT_PROGRAM,&oldProgram);
+    glGetIntegerv(GL_VIEWPORT,viewport);
+    GLuint data=0,tex[2]={0},fbo=0,vao=0,vbo=0,prog=0;
+    GLuint vs=tcShader(GL_VERTEX_SHADER,@"#version 150\nin vec2 pos; void main(){gl_Position=vec4(pos,0,1);}");
+    GLuint fs=tcShader(GL_FRAGMENT_SHADER,@"#version 150\nuniform sampler2D linearData; uniform int idx; out vec4 color; void main(){int w=textureSize(linearData,0).x; color=texelFetch(linearData,ivec2(idx%w,idx/w),0);}");
+    BOOL ok=vs&&fs;
+    if(ok){
+        prog=glCreateProgram();glAttachShader(prog,vs);glAttachShader(prog,fs);
+        glBindAttribLocation(prog,0,"pos");glLinkProgram(prog);
+        GLint linked=0;glGetProgramiv(prog,GL_LINK_STATUS,&linked);ok=linked!=0;
+    }
+    if(ok){
+        const unsigned char values[]={255,0,0,255,0,255,0,255,0,0,255,255};
+        glGenTextures(2,tex);glGenBuffers(1,&data);
+        glBindBuffer(GL_PIXEL_UNPACK_BUFFER,data);
+        glBufferData(GL_PIXEL_UNPACK_BUFFER,sizeof(values),values,GL_DYNAMIC_DRAW);
+        glBindBuffer(GL_PIXEL_UNPACK_BUFFER,0);
+        glBindTexture(GL_TEXTURE_2D,tex[1]);
+        glTexImage2D(GL_TEXTURE_2D,0,GL_RGBA8,4,4,0,GL_RGBA,GL_UNSIGNED_BYTE,NULL);
+        glGenFramebuffers(1,&fbo);glBindFramebuffer(GL_FRAMEBUFFER,fbo);
+        glFramebufferTexture2D(GL_FRAMEBUFFER,GL_COLOR_ATTACHMENT0,GL_TEXTURE_2D,tex[1],0);
+        glDrawBuffer(GL_COLOR_ATTACHMENT0);glReadBuffer(GL_COLOR_ATTACHMENT0);
+        ok=glCheckFramebufferStatus(GL_FRAMEBUFFER)==GL_FRAMEBUFFER_COMPLETE;
+        glBindBuffer(GL_PIXEL_UNPACK_BUFFER,data);
+        glPixelStorei(GL_UNPACK_ROW_LENGTH,7);
+        ok=ok&&upload(tex[0],data,GL_RGBA8,3,2);
+        GLint current=0,row=0,unpack=0;
+        glGetIntegerv(GL_TEXTURE_BINDING_2D,&current);glGetIntegerv(GL_UNPACK_ROW_LENGTH,&row);
+        glGetIntegerv(GL_PIXEL_UNPACK_BUFFER_BINDING,&unpack);
+        ok=ok&&current==(GLint)tex[1]&&row==7&&unpack==(GLint)data;
+        glPixelStorei(GL_UNPACK_ROW_LENGTH,0);
+        glBindBuffer(GL_PIXEL_UNPACK_BUFFER,0);
+        glBindTexture(GL_TEXTURE_2D,tex[0]);glUseProgram(prog);
+        glUniform1i(glGetUniformLocation(prog,"linearData"),0);
+        GLint location=glGetUniformLocation(prog,"idx");
+        const GLfloat verts[]={-1,-1,3,-1,-1,3};
+        glGenVertexArrays(1,&vao);glBindVertexArray(vao);glGenBuffers(1,&vbo);
+        glBindBuffer(GL_ARRAY_BUFFER,vbo);glBufferData(GL_ARRAY_BUFFER,sizeof(verts),verts,GL_STATIC_DRAW);
+        glVertexAttribPointer(0,2,GL_FLOAT,GL_FALSE,0,NULL);glEnableVertexAttribArray(0);
+        glViewport(0,0,4,4);
+        for(int i=0;i<3&&ok;i++){
+            glUniform1i(location,i);glDrawArrays(GL_TRIANGLES,0,3);
+            unsigned char px[4]={0};glReadPixels(2,2,1,1,GL_RGBA,GL_UNSIGNED_BYTE,px);
+            ok=glGetError()==GL_NO_ERROR&&memcmp(px,values+4*i,4)==0;
+        }
+        const unsigned char updated[]={255,255,0,255};
+        glBindBuffer(GL_PIXEL_UNPACK_BUFFER,data);
+        glBufferSubData(GL_PIXEL_UNPACK_BUFFER,8,4,updated);
+        glBindBuffer(GL_PIXEL_UNPACK_BUFFER,0);
+        ok=ok&&upload(tex[0],data,GL_RGBA8,3,2);
+        if(ok){
+            glUniform1i(location,2);glDrawArrays(GL_TRIANGLES,0,3);
+            unsigned char px[4]={0};glReadPixels(2,2,1,1,GL_RGBA,GL_UNSIGNED_BYTE,px);
+            ok=glGetError()==GL_NO_ERROR&&memcmp(px,updated,4)==0;
+        }
+        // Verify the same path with actual floating-point texture storage.
+        const GLfloat floatValues[]={0,1,1,1};
+        glBindBuffer(GL_PIXEL_UNPACK_BUFFER,data);
+        glBufferData(GL_PIXEL_UNPACK_BUFFER,sizeof(floatValues),floatValues,GL_DYNAMIC_DRAW);
+        glBindBuffer(GL_PIXEL_UNPACK_BUFFER,0);
+        ok=ok&&upload(tex[0],data,GL_RGBA32F,1,1);
+        if(ok){
+            glUniform1i(location,0);glDrawArrays(GL_TRIANGLES,0,3);
+            unsigned char px[4]={0};glReadPixels(2,2,1,1,GL_RGBA,GL_UNSIGNED_BYTE,px);
+            ok=glGetError()==GL_NO_ERROR&&px[0]==0&&px[1]==255&&px[2]==255&&px[3]==255;
+        }
+    }
+    glUseProgram((GLuint)oldProgram);glBindVertexArray((GLuint)oldVAO);
+    glBindBuffer(GL_ARRAY_BUFFER,(GLuint)oldVBO);glBindBuffer(GL_PIXEL_UNPACK_BUFFER,(GLuint)oldPBO);
+    glPixelStorei(GL_UNPACK_ROW_LENGTH,oldRow);
+    glBindFramebuffer(GL_READ_FRAMEBUFFER,(GLuint)oldRead);glBindFramebuffer(GL_DRAW_FRAMEBUFFER,(GLuint)oldDraw);
+    glBindTexture(GL_TEXTURE_2D,(GLuint)oldTexture);glActiveTexture((GLenum)oldActive);
+    glViewport(viewport[0],viewport[1],viewport[2],viewport[3]);
+    if(data)glDeleteBuffers(1,&data);if(vbo)glDeleteBuffers(1,&vbo);if(vao)glDeleteVertexArrays(1,&vao);
+    if(fbo)glDeleteFramebuffers(1,&fbo);glDeleteTextures(2,tex);
+    if(prog)glDeleteProgram(prog);if(vs)glDeleteShader(vs);if(fs)glDeleteShader(fs);
+    dlclose(lib);
+    return glGetError()==GL_NO_ERROR&&ok;
+}
 // Retain drawable for visual verification after dismissing the report.
 static NSOpenGLContext *tcVisibleContext;
 static void tcTestDrawable(NSView *view,NSOpenGLContext *ctx,NSMutableString *r) {
@@ -203,7 +299,8 @@ void TCMacDiagnostics(NSView *view) {
             [r appendFormat:@"\nBase-vertex indexed draw/read: %@",tcDraw(@"150",YES)?@"PASS":@"FAIL"];
             [r appendFormat:@"\nImGui polygon fill mode: %@",tcTestPolygonFill()?@"PASS":@"FAIL"];
             [r appendFormat:@"\nTexture clone framebuffer blit: %@",tcTestBlit()?@"PASS":@"FAIL"];
-            [r appendFormat:@"\nTexture-buffer extension advertised: %@",tcTextureBufferAdvertised()?@"YES (not implemented)":@"NO"];
+            [r appendFormat:@"\nTexture-buffer extension advertised: %@",tcTextureBufferAdvertised()?@"YES":@"NO"];
+            [r appendFormat:@"\nGLES3 linear texture upload/fetch/update: %@",tcTestLinearTexture()?@"PASS":@"FAIL"];
             tcTestDrawable(view,ctx,r);
         }
         [NSOpenGLContext clearCurrentContext];

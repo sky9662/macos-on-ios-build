@@ -8,6 +8,7 @@
 #import <stdlib.h>
 #include "gl_drawable.h"
 #include "gl_index.h"
+#include "gl_texel_layout.h"
 typedef void (*ShaderSourceFn)(GLuint,GLsizei,const GLchar *const *,const GLint *);
 void glShaderSource(GLuint shader,GLsizei count,const GLchar *const *strings,const GLint *lengths) {
     static ShaderSourceFn realSource;
@@ -202,4 +203,78 @@ void glDrawElementsBaseVertex(GLenum mode,GLsizei count,GLenum type,const void *
     else NSLog(@"TC base vertex: temporary index upload failed");
     glBindBuffer(GL_ELEMENT_ARRAY_BUFFER,(GLuint)binding);
     glDeleteBuffers(1,&temporary);
+}
+
+// Source-level GLES3 alternative to a desktop texture buffer. This is not a
+// transparent glTexBuffer shim: the caller owns the texture and uses a
+// sampler2D with integer coordinates (index % width, index / width).
+// Data stays in the driver's buffer storage and is uploaded via a PBO.
+// Caller supplies a valid texture name and buffer name; no previous GL
+// errors are allowed. Return 1 only after the real upload succeeds.
+int TCUploadLinearTexture2D(GLuint texture,GLuint buffer,GLenum internalFormat,
+                            size_t count,size_t widthLimit) {
+    GLenum type=0;size_t texelBytes=0;
+    if(internalFormat==GL_RGBA8){type=GL_UNSIGNED_BYTE;texelBytes=4;}
+    else if(internalFormat==GL_RGBA32F){type=GL_FLOAT;texelBytes=16;}
+    else return 0;
+    if(![EAGLContext currentContext]||!texture||!buffer||!glIsBuffer(buffer))return 0;
+    if(glGetError()!=GL_NO_ERROR)return 0;
+    GLint maxSide=0,oldTexture=0,oldPBO=0;
+    tcRealGetInteger()(GL_MAX_TEXTURE_SIZE,&maxSide);
+    TCTexelLayout layout;
+    if(maxSide<=0||!tcTexelLayout(count,texelBytes,(size_t)maxSide,widthLimit,&layout))return 0;
+    tcRealGetInteger()(GL_TEXTURE_BINDING_2D,&oldTexture);
+    tcRealGetInteger()(GL_PIXEL_UNPACK_BUFFER_BINDING,&oldPBO);
+    const GLenum unpackKeys[]={GL_UNPACK_ALIGNMENT,GL_UNPACK_ROW_LENGTH,GL_UNPACK_SKIP_ROWS,
+        GL_UNPACK_SKIP_PIXELS,GL_UNPACK_IMAGE_HEIGHT,GL_UNPACK_SKIP_IMAGES};
+    GLint oldUnpack[6]={0};
+    for(size_t i=0;i<6;i++)tcRealGetInteger()(unpackKeys[i],&oldUnpack[i]);
+    int ok=0;
+    glBindBuffer(GL_PIXEL_UNPACK_BUFFER,buffer);
+    GLint64 bufferBytes=0;GLint mapped=0;
+    glGetBufferParameteri64v(GL_PIXEL_UNPACK_BUFFER,GL_BUFFER_SIZE,&bufferBytes);
+    glGetBufferParameteriv(GL_PIXEL_UNPACK_BUFFER,GL_BUFFER_MAPPED,&mapped);
+    if(glGetError()!=GL_NO_ERROR||mapped||bufferBytes<0||(uint64_t)bufferBytes<layout.bytes)goto restore;
+    glBindBuffer(GL_PIXEL_UNPACK_BUFFER,0);
+    for(size_t i=0;i<6;i++)glPixelStorei(unpackKeys[i],i==0?1:0);
+    glBindTexture(GL_TEXTURE_2D,texture);
+    glTexParameteri(GL_TEXTURE_2D,GL_TEXTURE_MIN_FILTER,GL_NEAREST);
+    glTexParameteri(GL_TEXTURE_2D,GL_TEXTURE_MAG_FILTER,GL_NEAREST);
+    glTexParameteri(GL_TEXTURE_2D,GL_TEXTURE_WRAP_S,GL_CLAMP_TO_EDGE);
+    glTexParameteri(GL_TEXTURE_2D,GL_TEXTURE_WRAP_T,GL_CLAMP_TO_EDGE);
+    glTexParameteri(GL_TEXTURE_2D,GL_TEXTURE_BASE_LEVEL,0);
+    glTexParameteri(GL_TEXTURE_2D,GL_TEXTURE_MAX_LEVEL,0);
+    glTexImage2D(GL_TEXTURE_2D,0,(GLint)internalFormat,(GLsizei)layout.width,
+                 (GLsizei)layout.height,0,GL_RGBA,type,NULL);
+    if(glGetError()!=GL_NO_ERROR)goto restore;
+    glBindBuffer(GL_PIXEL_UNPACK_BUFFER,buffer);
+    if(layout.fullRows)
+        glTexSubImage2D(GL_TEXTURE_2D,0,0,0,(GLsizei)layout.width,
+                        (GLsizei)layout.fullRows,GL_RGBA,type,(const void *)0);
+    if(layout.tail) {
+        uintptr_t offset=(uintptr_t)(layout.fullRows*layout.width*texelBytes);
+        glTexSubImage2D(GL_TEXTURE_2D,0,0,(GLint)layout.fullRows,(GLsizei)layout.tail,
+                        1,GL_RGBA,type,(const void *)offset);
+    }
+    ok=glGetError()==GL_NO_ERROR;
+restore:
+    glBindTexture(GL_TEXTURE_2D,(GLuint)oldTexture);
+    glBindBuffer(GL_PIXEL_UNPACK_BUFFER,(GLuint)oldPBO);
+    for(size_t i=0;i<6;i++)glPixelStorei(unpackKeys[i],oldUnpack[i]);
+    return glGetError()==GL_NO_ERROR&&ok;
+}
+
+// Use the real texture-buffer entry point only if the current driver
+// advertises the matching extension and provides the function. On GLES3.0
+// the source-level 2D path above is separate, never a fake attachment.
+void glTexBuffer(GLenum target,GLenum internalformat,GLuint buffer) {
+    typedef void (*Fn)(GLenum,GLenum,GLuint);
+    static void *lib;static dispatch_once_t once;
+    dispatch_once(&once,^{lib=dlopen("/System/Library/Frameworks/OpenGLES.framework/OpenGLES",RTLD_NOW|RTLD_LOCAL);});
+    Fn fn=NULL;
+    if(lib&&tcHasGLExtension("GL_EXT_texture_buffer"))fn=(Fn)dlsym(lib,"glTexBufferEXT");
+    if(!fn&&lib&&tcHasGLExtension("GL_OES_texture_buffer"))fn=(Fn)dlsym(lib,"glTexBufferOES");
+    if(fn){fn(target,internalformat,buffer);return;}
+    tcPolygonError(target==0x8c2a?GL_INVALID_OPERATION:GL_INVALID_ENUM);
+    NSLog(@"TC GL: native texture buffer unavailable; source-level 2D adaptation required");
 }

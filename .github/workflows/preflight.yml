@@ -69,6 +69,8 @@ jobs:
           "$RUNNER_TEMP/tc-gl-drawable"
           xcrun --sdk macosx clang -std=c11 -Wall -Wextra -Werror scripts/test_gl_index.c -o "$RUNNER_TEMP/tc-gl-index"
           "$RUNNER_TEMP/tc-gl-index"
+          xcrun --sdk macosx clang -std=c11 -Wall -Wextra -Werror scripts/test_gl_texel_layout.c -o "$RUNNER_TEMP/tc-gl-texel-layout"
+          "$RUNNER_TEMP/tc-gl-texel-layout"
           python3 -m py_compile scripts/preflight.py
           python3 scripts/test_tc_jit_audit.py
       - name: Compile real GLES3 triangle probe
@@ -145,7 +147,7 @@ jobs:
           mkdir -p "$FW"
           xcrun --sdk iphoneos clang -target arm64-apple-ios17.0 -fobjc-arc -dynamiclib -install_name @rpath/OpenGLShim.framework/OpenGLShim -framework Foundation -Wl,-reexport_framework,OpenGLES diagnostics/opengl.m -o "$FW/OpenGLShim"
           xcrun nm -gUj "$FW/OpenGLShim" > "$RUNNER_TEMP/tc-gl-symbols.txt"
-          for symbol in glDrawBuffer glDrawBuffers glReadBuffer glGetIntegerv glMapBuffer glDrawElementsBaseVertex glPolygonMode glGetError; do
+          for symbol in glDrawBuffer glDrawBuffers glReadBuffer glGetIntegerv glMapBuffer glDrawElementsBaseVertex glPolygonMode glGetError glTexBuffer TCUploadLinearTexture2D; do
             grep -Fx "_$symbol" "$RUNNER_TEMP/tc-gl-symbols.txt"
           done
           cp "$T/AppKitShim.framework/Info.plist" "$FW/Info.plist"
