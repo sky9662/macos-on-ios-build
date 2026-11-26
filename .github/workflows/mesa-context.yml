@@ -1,0 +1,63 @@
+name: Mesa desktop GL Mac context diagnostic
+on:
+  push:
+    branches: [main]
+    paths:
+      - '.github/workflows/mesa-context.yml'
+      - 'mesa/context/**'
+  workflow_dispatch:
+permissions:
+  contents: read
+  actions: read
+concurrency:
+  group: tc-mesa-context
+  cancel-in-progress: false
+jobs:
+  mac-context:
+    if: github.repository == 'sky9662/macos-on-ios-build' && github.event.repository.private == false
+    runs-on: xcode-27
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: actions/download-artifact@v4
+        with:
+          name: mesa-zink-moltenvk-ios-arm64
+          path: mesa-kit
+          github-token: ${{ github.token }}
+          run-id: 45802030168
+      - uses: actions/checkout@v4
+        with:
+          repository: zorrobyte/macos-on-ios-public
+          ref: c2562a333d4de4c08da4ceb4a4f1485bddb84e04
+          path: upstream
+          persist-credentials: false
+      - name: Build real Mac ARM64 desktop GL consumer and iOS AppKit adapter
+        run: bash mesa/context/build.sh mesa-kit upstream
+      - uses: actions/upload-artifact@v4
+        with:
+          name: tc-mesa-diagnostics-unsigned
+          path: TCMesaDiagnostics-unsigned.ipa
+          if-no-files-found: error
+  publish:
+    needs: mac-context
+    if: github.repository == 'sky9662/macos-on-ios-build' && github.event.repository.private == false
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: tc-mesa-diagnostics-unsigned
+          path: release
+      - name: Publish direct unsigned diagnostic IPA
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          TAG: tc-mesa-diagnostics-${{ github.run_id }}-${{ github.run_attempt }}
+        run: |
+          set -euxo pipefail
+          test "$(gh repo view "$GH_REPO" --json isPrivate --jq .isPrivate)" = false
+          test "$GH_REPO" = sky9662/macos-on-ios-build
+          gh release create "$TAG" release/TCMesaDiagnostics-unsigned.ipa --target "$GITHUB_SHA" --title "Mesa desktop GL diagnostics $TAG" --notes "Source-only Mac ARM64 compatibility diagnostic. OSMesa/Zink/MoltenVK from verified run 45802030168. No game code, credentials, profiles, or JIT execution. Device rendering unverified." --prerelease
