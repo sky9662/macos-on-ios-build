@@ -16,7 +16,12 @@ for mac,shim in [("AppKit","AppKitShim"),("Cocoa","CocoaShim"),("OpenGL","OpenGL
     exports=set(subprocess.check_output(["xcrun","nm","-gUj",str(fw)],text=True).splitlines())
     dest="@rpath/"+shim+".framework/"+shim
     # The proven shim reexports OpenGLES or AppKit; Cocoa also uses Foundation.
-    if mac=="OpenGL":exports.update(libraries.get("/System/Library/Frameworks/OpenGLES.framework/OpenGLES",[]))
+    if mac=="OpenGL":
+        mesa=build/"MesaCore.framework"/"MesaCore"
+        if mesa.is_file():
+            exports.update(subprocess.check_output(["xcrun","nm","-gUj",str(mesa)],text=True).splitlines())
+        else:
+            exports.update(libraries.get("/System/Library/Frameworks/OpenGLES.framework/OpenGLES",[]))
     if mac=="Cocoa":
         exports.update(libraries.get("@rpath/AppKitShim.framework/AppKitShim",[]))
     libraries[dest]=sorted(exports)

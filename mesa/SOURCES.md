@@ -47,3 +47,6 @@ Run 45820202550 succeeded. Physical device: pixel format and MoltenVK load PASS,
 
 ## Round 53 physical device validation
 Run 45822258755, commit 1cc4dd5c3f59bed208fb0465eca56b7ff4543c2f: user-reported device diagnostic screenshot confirms GLFW identifier, pixel format, MoltenVK load, Vulkan instance (0), one GPU, OSMesa 3.2, Metal device/queue, Zink renderer on Apple A20 Pro GPU, GL 4.1 Core Mesa 25.0.7 (override), GLSL 4.10, GL_BACK, desktop GL bundle lookup, context sharing/resize/restore, IOSurface ring seven frames, GLSL 150 samplerBuffer/base vertex/update, GLSL 410 draw, BGRA readback and Metal present all passed. This validates the diagnostic rendering path, not full OpenGL conformance or commercial game execution. Do not repeat pairing or these baseline tests without a regression. Game JIT allocator and game-specific compatibility remain unverified.
+
+## Mesa local runtime kit integration
+Export the diagnostic frameworks as a separate local kit, include third-party notices in locally packaged apps, and use MesaCore exports rather than GLES exports for the desktop GL catalog. Run the existing synthetic ARM64 packaging fixture before artifact upload. GLES kit remains separate. Actual game execution and allocator remain unverified.

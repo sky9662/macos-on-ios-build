@@ -40,6 +40,11 @@ jobs:
           name: tc-mesa-diagnostics-unsigned
           path: TCMesaDiagnostics-unsigned.ipa
           if-no-files-found: error
+      - uses: actions/upload-artifact@v4
+        with:
+          name: tc-mesa-runtime-kit
+          path: tc-mesa-runtime-kit/
+          if-no-files-found: error
   publish:
     needs: mac-context
     if: github.repository == 'sky9662/macos-on-ios-build' && github.event.repository.private == false

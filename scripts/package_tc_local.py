@@ -90,6 +90,7 @@ def package(game,kit,out,audit):
         safe_copy(kit/"Frameworks",frameworks)
         validate_frameworks(frameworks)
         shutil.copy2(kit/"UPSTREAM-LICENSE.txt",bundle/"UPSTREAM-LICENSE.txt")
+        if (kit/"ThirdParty").is_dir():safe_copy(kit/"ThirdParty",bundle/"ThirdParty")
         copy_game_resources(app,bundle)
         # No second copy of executable code; resource path compatibility still requires device testing.
         for n in NAMES:

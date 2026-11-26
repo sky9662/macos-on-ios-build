@@ -80,3 +80,32 @@ with zipfile.ZipFile(sys.argv[1]) as archive:
     if info["CFBundleIdentifier"] != "com.sky9662.tcmesadiagnostics":
         raise SystemExit("Diagnostic app bundle identifier changed")
 PY
+
+# Export the same frameworks used by the device-tested diagnostic, separately
+# from the GLES kit. Only independently built compatibility code is included.
+localkit="$GITHUB_WORKSPACE/tc-mesa-runtime-kit"
+mkdir -p "$localkit"
+cp -R "$app/Frameworks" "$app/ThirdParty" "$localkit/"
+cp "$app/UPSTREAM-LICENSE.txt" "$localkit/"
+cp "$up/shim/Info-ios.plist" "$localkit/"
+cp scripts/tc_windows.py scripts/package_tc_local.py scripts/tc_jit_audit.py scripts/audit_mac_bundle.py "$localkit/"
+HIT="$T/HIToolboxShim.framework"
+mkdir -p "$HIT"
+xcrun --sdk iphoneos clang -target arm64-apple-ios17.0 -fobjc-arc -dynamiclib -install_name @rpath/HIToolboxShim.framework/HIToolboxShim -framework Foundation diagnostics/keyboard.m -o "$HIT/HIToolboxShim"
+cp "$T/OpenGLShim.framework/Info.plist" "$HIT/Info.plist"
+plutil -replace CFBundleExecutable -string HIToolboxShim "$HIT/Info.plist"
+plutil -replace CFBundleIdentifier -string com.apple.HIToolbox "$HIT/Info.plist"
+cp -R "$HIT" "$localkit/Frameworks/"
+python3 scripts/build_sdk_catalog.py "$up" "$T" "$localkit/ios-sdk-exports.json"
+PYTHONPATH=scripts python3 scripts/test_tc_kit.py "$localkit"
+PYTHONPATH=scripts python3 scripts/test_tc_package.py "$localkit"
+python3 - "$localkit" <<'PY'
+import json, pathlib, sys
+root=pathlib.Path(sys.argv[1])
+catalog=json.loads((root/"ios-sdk-exports.json").read_text())
+symbols=catalog["libraries"]["@rpath/OpenGLShim.framework/OpenGLShim"]
+for symbol in ("_glTexBuffer","_glPolygonMode","_glDrawElementsBaseVertex"):
+    assert symbol in symbols, symbol
+for name in ("MesaCore","MoltenVK"):
+    assert (root/"Frameworks"/(name+".framework")/name).is_file()
+PY
