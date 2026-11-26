@@ -8,7 +8,7 @@ out="$RUNNER_TEMP/tc-mesa-package"
 test "$(cat "$kit/libOSMesa.version")" = mesa-25.0.7
 test "$(cat "$kit/libMoltenVK.version")" = v1.4.2
 mkdir -p "$T"
-for pair in "libOSMesa OpenGLShim" "libMoltenVK MoltenVK"; do
+for pair in "libOSMesa MesaCore" "libMoltenVK MoltenVK"; do
   read -r source name <<< "$pair"
   fw="$T/$name.framework";mkdir "$fw"
   cp "$kit/libraries/$source.dylib" "$fw/$name"
@@ -23,7 +23,23 @@ for pair in "libOSMesa OpenGLShim" "libMoltenVK MoltenVK"; do
   plutil -insert MinimumOSVersion -string 17.0 "$fw/Info.plist"
   plutil -lint "$fw/Info.plist"
 done
-xcrun nm -gUj "$T/OpenGLShim.framework/OpenGLShim" > "$T/gl-exports.txt"
+# Separate re-export umbrella preserves Mac GL imports while overriding
+# only default-buffer selection. All other GL functions remain Mesa-native.
+xcrun --sdk macosx clang -std=c11 -Wall -Wextra -Werror mesa/context/test-pixel-format.c -o "$T/test-pixel-format"
+"$T/test-pixel-format"
+mkdir "$T/OpenGLShim.framework"
+xcrun --sdk iphoneos clang -target arm64-apple-ios17.0 -std=c11 -Wall -Wextra -Werror -dynamiclib \
+  -install_name @rpath/OpenGLShim.framework/OpenGLShim \
+  -Wl,-reexport_library,"$T/MesaCore.framework/MesaCore" \
+  mesa/context/desktop-gl.c -o "$T/OpenGLShim.framework/OpenGLShim"
+cp "$T/MesaCore.framework/Info.plist" "$T/OpenGLShim.framework/Info.plist"
+plutil -replace CFBundleExecutable -string OpenGLShim "$T/OpenGLShim.framework/Info.plist"
+plutil -replace CFBundleIdentifier -string com.sky9662.tcmesadiagnostics.OpenGLShim "$T/OpenGLShim.framework/Info.plist"
+xcrun otool -l "$T/OpenGLShim.framework/OpenGLShim" | grep -A4 LC_REEXPORT_DYLIB | grep -F @rpath/MesaCore.framework/MesaCore
+xcrun nm -gUj "$T/MesaCore.framework/MesaCore" > "$T/gl-exports.txt"
+xcrun nm -gUj "$T/OpenGLShim.framework/OpenGLShim" > "$T/gl-overrides.txt"
+for s in glDrawBuffer glReadBuffer glDrawBuffers; do grep -Fx "_$s" "$T/gl-overrides.txt"; done
+cp mesa/context/pixel-format.h "$up/shim/overrides/TCMesaPixelFormat.h"
 for s in OSMesaCreateContextAttribs OSMesaMakeCurrent OSMesaPixelStore OSMesaGetProcAddress glTexBuffer glPolygonMode glDrawElementsBaseVertex glShaderSource glGetString glFinish; do
   grep -Fx "_$s" "$T/gl-exports.txt"
 done
@@ -37,7 +53,8 @@ xcrun nm -u "$T/MacProbe.app/Contents/MacOS/MacProbe" | awk '{print $NF}' | grep
 while IFS= read -r symbol; do grep -Fx "$symbol" "$T/gl-exports.txt"; done < "$T/mac-gl-imports.txt"
 python3 scripts/package_mac_probe.py "$T" "$up" "$out" --diagnostics
 app="$out/Payload/MacProbe.app"
-cp -R "$T/MoltenVK.framework" "$app/Frameworks/"
+cp -R "$T/MoltenVK.framework" "$T/MesaCore.framework" "$app/Frameworks/"
+codesign --remove-signature "$app/Frameworks/MesaCore.framework/MesaCore"
 codesign --remove-signature "$app/Frameworks/MoltenVK.framework/MoltenVK"
 plutil -replace CFBundleIdentifier -string com.sky9662.tcmesadiagnostics "$app/Info.plist"
 plutil -replace CFBundleDisplayName -string "TC Mesa" "$app/Info.plist"

@@ -3,6 +3,7 @@
 #import <OpenGL/gl3.h>
 #import <dlfcn.h>
 #import <string.h>
+_Static_assert(NSOpenGLPFAAccelerated==73 && NSOpenGLPFAClosestPolicy==74 && NSOpenGLPFADoubleBuffer==5 && NSOpenGLPFAColorSize==8 && NSOpenGLPFAAlphaSize==11 && NSOpenGLPFADepthSize==12 && NSOpenGLPFAStencilSize==13 && NSOpenGLPFASampleBuffers==55 && NSOpenGLPFAOpenGLProfile==99 && NSOpenGLProfileVersion3_2Core==0x3200 && NSOpenGLProfileVersion4_1Core==0x4100,"NSGL attribute ABI mismatch");
 static NSOpenGLContext *visibleContext;
 static GLuint shader(GLenum kind,NSString *source){
     GLuint s=glCreateShader(kind);if(!s)return 0;
@@ -22,7 +23,7 @@ static BOOL desktopDraw(NSString *version,int w,int h){
         GLint linked=0;glGetProgramiv(program,GL_LINK_STATUS,&linked);ok=linked!=0;
     }
     if(ok){
-        glViewport(0,0,w,h);glDrawBuffer(GL_FRONT);glReadBuffer(GL_FRONT);
+        glViewport(0,0,w,h);glDrawBuffer(GL_BACK);glReadBuffer(GL_BACK);
         glClearColor(0,0,0,1);glClear(GL_COLOR_BUFFER_BIT);
         const GLfloat verts[]={2,2,2,2,2,2,-1,-1,3,-1,-1,3};
         const GLushort indices[]={99,0,1,2};
@@ -54,7 +55,10 @@ static BOOL desktopDraw(NSString *version,int w,int h){
 }
 void TCMacDiagnostics(NSView *view){
     NSMutableString *r=[NSMutableString stringWithString:@"Mac ARM64 + Mesa desktop GL"];
-    NSOpenGLPixelFormatAttribute attrs[]={NSOpenGLPFAOpenGLProfile,NSOpenGLProfileVersion3_2Core,0};
+    NSOpenGLPixelFormatAttribute attrs[]={NSOpenGLPFAAccelerated,NSOpenGLPFAClosestPolicy,
+        NSOpenGLPFAOpenGLProfile,NSOpenGLProfileVersion3_2Core,NSOpenGLPFAColorSize,24,
+        NSOpenGLPFAAlphaSize,8,NSOpenGLPFADepthSize,24,NSOpenGLPFAStencilSize,8,
+        NSOpenGLPFADoubleBuffer,NSOpenGLPFASampleBuffers,0,0};
     NSOpenGLPixelFormat *fmt=[[NSOpenGLPixelFormat alloc]initWithAttributes:attrs];
     NSOpenGLContext *ctx=fmt?[[NSOpenGLContext alloc]initWithFormat:fmt shareContext:nil]:nil;
     if(ctx){
@@ -67,7 +71,15 @@ void TCMacDiagnostics(NSView *view){
         NSString *path=[[NSBundle.mainBundle privateFrameworksPath]stringByAppendingPathComponent:@"OpenGLShim.framework"];
         NSURL *url=[NSURL fileURLWithPath:path isDirectory:YES];
         CFBundleRef b=CFBundleCreate(kCFAllocatorDefault,(__bridge CFURLRef)url);
-        BOOL lookup=b&&CFBundleGetFunctionPointerForName(b,CFSTR("glTexBuffer"))&&CFBundleGetFunctionPointerForName(b,CFSTR("glDrawElementsBaseVertex"))&&CFBundleGetFunctionPointerForName(b,CFSTR("glShaderSource"));
+        void (*dynamicDraw)(GLenum)=b?(void (*)(GLenum))CFBundleGetFunctionPointerForName(b,CFSTR("glDrawBuffer")):NULL;
+        BOOL lookup=b&&CFBundleGetFunctionPointerForName(b,CFSTR("glTexBuffer"))&&CFBundleGetFunctionPointerForName(b,CFSTR("glDrawElementsBaseVertex"))&&CFBundleGetFunctionPointerForName(b,CFSTR("glShaderSource"))&&dynamicDraw;
+        BOOL back=NO;
+        if(dynamicDraw&&version){
+            dynamicDraw(GL_BACK);glReadBuffer(GL_BACK);
+            GLint d=0,q=0;glGetIntegerv(GL_DRAW_BUFFER0,&d);glGetIntegerv(GL_READ_BUFFER,&q);
+            back=glGetError()==GL_NO_ERROR&&(d==GL_FRONT||d==GL_FRONT_LEFT)&&(q==GL_FRONT||q==GL_FRONT_LEFT);
+        }
+        [r appendFormat:@"\nGLFW pixel format + GL_BACK: %@",back?@"PASS":@"FAIL"];
         if(b)CFRelease(b);
         [r appendFormat:@"\nDesktop GL bundle lookup: %@",lookup?@"PASS":@"FAIL"];
         void (*size)(id,int *,int *)=dlsym(RTLD_DEFAULT,"TCMesaDrawableSize");

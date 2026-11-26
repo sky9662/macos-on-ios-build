@@ -6,6 +6,7 @@
 #include <stdlib.h>
 #include <stdint.h>
 #include <math.h>
+#include "TCMesaPixelFormat.h"
 typedef void *TCOSContext;
 extern TCOSContext OSMesaCreateContextAttribs(const int *,TCOSContext);
 extern unsigned char OSMesaMakeCurrent(TCOSContext,void *,unsigned,int,int);
@@ -17,19 +18,15 @@ enum { TC_BGRA=1, TC_FORMAT=0x22, TC_DEPTH=0x30, TC_STENCIL=0x31,
        TC_PROFILE=0x33, TC_CORE=0x34, TC_MAJOR=0x36, TC_MINOR=0x37,
        TC_ROW_LENGTH=0x10, TC_Y_UP=0x11, TC_UNSIGNED_BYTE=0x1401 };
 @interface NSOpenGLPixelFormat : NSObject
-@property(nonatomic) int major,minor;
+@property(nonatomic) int major,minor,depth,stencil,wantsDouble;
 - (instancetype)initWithAttributes:(const uint32_t *)attrs;
 @end
 @implementation NSOpenGLPixelFormat
 - (instancetype)initWithAttributes:(const uint32_t *)attrs {
     if(!(self=[super init])||!attrs)return nil;
-    _major=3;_minor=2;
-    // This first adapter handles the diagnostic's core profile request.
-    // Reject unrecognized lists rather than claim arbitrary format support.
-    if(attrs[0]==99&&attrs[2]==0){
-        if(attrs[1]==0x4100){_major=4;_minor=1;}
-        else if(attrs[1]!=0x3200)return nil;
-    }else if(attrs[0]!=0)return nil;
+    TCPixelFormat p;
+    if(!tcParsePixelFormat(attrs,64,&p))return nil;
+    _major=p.major;_minor=p.minor;_depth=p.depth;_stencil=p.stencil;_wantsDouble=p.wantsDouble;
     return self;
 }
 @end
@@ -57,7 +54,7 @@ enum { TC_BGRA=1, TC_FORMAT=0x22, TC_DEPTH=0x30, TC_STENCIL=0x31,
     setenv("GALLIUM_DRIVER","zink",1);
     setenv("ZINK_VULKAN_LIBRARY",vk.fileSystemRepresentation,1);
     setenv("MVK_CONFIG_LOG_LEVEL","1",0);
-    const int attrs[]={TC_FORMAT,TC_BGRA,TC_DEPTH,24,TC_STENCIL,8,
+    const int attrs[]={TC_FORMAT,TC_BGRA,TC_DEPTH,format.depth,TC_STENCIL,format.stencil,
       TC_PROFILE,TC_CORE,TC_MAJOR,format.major,TC_MINOR,format.minor,0};
     _mesa=OSMesaCreateContextAttribs(attrs,share?share.mesa:NULL);
     if(!_mesa)return nil;
