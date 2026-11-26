@@ -1,0 +1,66 @@
+name: Mesa desktop OpenGL for iOS
+on:
+  push:
+    branches: [main]
+    paths:
+      - '.github/workflows/mesa-ios.yml'
+      - 'mesa/**'
+  workflow_dispatch:
+permissions:
+  contents: read
+concurrency:
+  group: tc-mesa-ios
+  cancel-in-progress: false
+jobs:
+  desktop-gl:
+    if: github.repository == 'sky9662/macos-on-ios-build' && github.event.repository.private == false
+    runs-on: xcode-27
+    timeout-minutes: 180
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: actions/checkout@v4
+        with:
+          repository: thebcd69/bcd-games
+          ref: 8c784fe01359ece82158567676948628f5f41099
+          path: bcd-recipes
+          persist-credentials: false
+          sparse-checkout: |
+            build/mesa-ios
+            build/moltenvk-ios
+            LICENSE
+            LICENSE-BCD.md
+            LICENSE-EXCEPTION.md
+            THIRD-PARTY-NOTICES.md
+      - name: Check toolchain and pinned recipe
+        run: |
+          set -euxo pipefail
+          test "$(uname -m)" = arm64
+          xcodebuild -version
+          xcrun --sdk iphoneos --show-sdk-version
+          test "$(git -C bcd-recipes rev-parse HEAD)" = 8c784fe01359ece82158567676948628f5f41099
+          bash -n bcd-recipes/build/moltenvk-ios/build.sh
+          bash -n bcd-recipes/build/mesa-ios/build.sh
+          brew install bison flex pkgconf
+          printf '%s\n' "$(brew --prefix bison)/bin" "$(brew --prefix flex)/bin" >> "$GITHUB_PATH"
+      - name: Build pinned MoltenVK for iOS
+        env:
+          MOLTENVK_JOBS: '3'
+        run: |
+          set -euxo pipefail
+          bash bcd-recipes/build/moltenvk-ios/build.sh
+      - name: Build pinned OSMesa and Zink for iOS
+        env:
+          MESA_JOBS: '3'
+        run: |
+          set -euxo pipefail
+          bash bcd-recipes/build/mesa-ios/build.sh
+      - name: Verify iOS libraries, exports and compile-only desktop GL consumer
+        run: bash mesa/verify-build.sh bcd-recipes mesa-kit
+      - uses: actions/upload-artifact@v4
+        with:
+          name: mesa-zink-moltenvk-ios-arm64
+          path: mesa-kit/
+          if-no-files-found: error
+          retention-days: 7
