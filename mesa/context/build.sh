@@ -59,7 +59,8 @@ app="$out/Payload/MacProbe.app"
 cp -R "$T/MoltenVK.framework" "$T/MesaCore.framework" "$app/Frameworks/"
 codesign --remove-signature "$app/Frameworks/MesaCore.framework/MesaCore"
 codesign --remove-signature "$app/Frameworks/MoltenVK.framework/MoltenVK"
-plutil -replace CFBundleIdentifier -string com.sky9662.tcmesadiagnostics "$app/Info.plist"
+# Preserve the installed TC Diagnostics identity across renderer upgrades.
+test "$(plutil -extract CFBundleIdentifier raw "$app/Info.plist")" = com.sky9662.tcdiagnostics
 plutil -replace CFBundleDisplayName -string "TC Mesa" "$app/Info.plist"
 mkdir -p "$app/ThirdParty"
 cp -R "$kit/licenses" "$kit/source-recipes" "$kit/SOURCES.md" "$kit/SHA256SUMS" "$app/ThirdParty/"
@@ -70,3 +71,12 @@ xcrun otool -L "$app/MacProbe" | grep -F @rpath/OpenGLShim.framework/OpenGLShim
 xcrun vtool -show-build "$app/Frameworks/MoltenVK.framework/MoltenVK" | grep -i 'platform IOS'
 (cd "$out" && zip -qry "$GITHUB_WORKSPACE/TCMesaDiagnostics-unsigned.ipa" Payload)
 unzip -t TCMesaDiagnostics-unsigned.ipa
+
+# Validate the actual distributed IPA, not just the staging directory.
+python3 - TCMesaDiagnostics-unsigned.ipa <<'PY'
+import plistlib, sys, zipfile
+with zipfile.ZipFile(sys.argv[1]) as archive:
+    info = plistlib.loads(archive.read("Payload/MacProbe.app/Info.plist"))
+    if info["CFBundleIdentifier"] != "com.sky9662.tcdiagnostics":
+        raise SystemExit("Diagnostic app bundle identifier changed")
+PY

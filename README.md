@@ -16,3 +16,7 @@ No blanket license is asserted for the new project code; the third-party license
 ## Releases
 
 Download the direct diagnostic IPA from Releases, then use your own valid signing configuration. This project does not distribute a playable game.
+
+### Diagnostic app identity
+
+TC Mesa retains the TC Diagnostics application bundle identifier `com.sky9662.tcdiagnostics` so renderer upgrades can replace the existing diagnostic when signed with the same identity and signing-tool configuration. Earlier Mesa releases used `com.sky9662.tcmesadiagnostics` and may be treated as separate apps. The Mesa build checks the final IPA identifier; framework identifiers remain unchanged.
