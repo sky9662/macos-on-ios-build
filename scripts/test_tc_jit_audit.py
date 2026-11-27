@@ -3,7 +3,7 @@ import tempfile
 import unittest
 from unittest.mock import patch
 
-from tc_jit_audit import audit, summarize, mode_summary, BINARIES
+from tc_jit_audit import audit, summarize, mode_summary, control_flow_summary, BINARIES
 
 # Synthetic text representing objdump output; no commercial instructions or binaries.
 FIXTURE = """
@@ -31,6 +31,22 @@ class AuditTests(unittest.TestCase):
         self.assertEqual(report["direct_calls"]["_c_jit"], 1)
         self.assertEqual(report["wrapper_calls"]["_c_set_protection"]["_sys_icache_invalidate"], 1)
         self.assertEqual(report["wrapper_calls"]["_c_set_protection"]["_pthread_jit_write_protect_np"], 1)
+
+    def test_control_flow_inventory(self):
+        result = control_flow_summary(FIXTURE)
+        self.assertEqual(result["wrappers"]["_c_jit"]["indirect_transfers"], 1)
+        self.assertEqual(result["wrappers"]["_c_set_protection"]["named_api_sequence"],
+                         ["_pthread_jit_write_protect_np", "_sys_icache_invalidate"])
+        self.assertEqual(result["direct_caller_patterns"], [
+            {"entry_points": ["_c_get_memory", "_c_jit", "_c_set_protection"], "function_count": 1}])
+        self.assertNotIn("_fixture", str(result))
+        self.assertNotIn("1018", str(result))
+
+    def test_control_flow_instruction_formats(self):
+        result = control_flow_summary("_c_jit:\n 1000: d63f0000 blr x0\n 1004: stp x1, x2, [sp]\n 1008: ret\n(__DATA,__data) section\n 1010: br x0\n")
+        self.assertEqual(result["wrappers"]["_c_jit"]["indirect_transfers"], 1)
+        self.assertEqual(result["wrappers"]["_c_jit"]["store_instructions"], 1)
+        self.assertEqual(result["wrappers"]["_c_jit"]["returns"], 1)
 
     def test_flags_are_exact_and_not_claimed_as_supported(self):
         raw = bytes([0]).join([b"@--no-ui", b"@--no-draw", b"--no-jit-extra", b"some--interpreter", b"--disable-jit", b""])
