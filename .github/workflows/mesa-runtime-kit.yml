@@ -1,0 +1,101 @@
+name: Publish refreshed Mesa local runtime kit
+on:
+  push:
+    branches: [main]
+    paths:
+      - '.github/workflows/mesa-runtime-kit.yml'
+      - 'scripts/tc_windows.py'
+      - 'scripts/package_tc_local.py'
+      - 'scripts/tc_jit_audit.py'
+      - 'scripts/audit_mac_bundle.py'
+      - 'scripts/test_tc_windows.py'
+      - 'scripts/test_tc_package.py'
+      - 'scripts/test_tc_kit.py'
+  workflow_dispatch:
+permissions:
+  contents: read
+  actions: read
+concurrency:
+  group: tc-mesa-runtime-kit
+  cancel-in-progress: false
+jobs:
+  verify:
+    if: github.repository == 'sky9662/macos-on-ios-build' && github.event.repository.private == false
+    runs-on: xcode-27
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - name: Retrieve and verify previously validated Mesa kit archive
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euxo pipefail
+          curl --fail --silent --show-error --location --retry 2 \
+            -H "Authorization: Bearer $GH_TOKEN" \
+            -H "Accept: application/vnd.github+json" \
+            https://api.github.com/repos/sky9662/macos-on-ios-build/actions/artifacts/15121266496/zip \
+            -o original-kit.zip
+          echo "b150d299ed9ca85485e8099d3c9e981f08be17b2221e22251d6233298f52976a  original-kit.zip" | shasum -a 256 -c -
+          unzip -t original-kit.zip
+          mkdir kit
+          unzip -q original-kit.zip -d kit
+          test -d kit/ThirdParty/licenses
+          test -d kit/ThirdParty/source-recipes
+          test -f kit/ThirdParty/SOURCES.md
+          test -f kit/ThirdParty/INTEGRATION.md
+          test -f kit/ThirdParty/SHA256SUMS
+      - name: Refresh local tools and test with unchanged Mesa runtime
+        env:
+          PYTHONDONTWRITEBYTECODE: '1'
+          PYTHONPATH: scripts
+        run: |
+          set -euxo pipefail
+          cp scripts/tc_windows.py scripts/package_tc_local.py scripts/tc_jit_audit.py scripts/audit_mac_bundle.py kit/
+          python3 scripts/test_tc_windows.py
+          python3 scripts/test_tc_jit_audit.py
+          python3 scripts/test_audit_mac_bundle.py
+          python3 scripts/test_tc_kit.py kit
+          python3 scripts/test_tc_package.py kit
+          for name in AppKitShim CocoaShim OpenGLShim HIToolboxShim MesaCore MoltenVK; do
+            fw="kit/Frameworks/$name.framework"
+            test "$(plutil -extract CFBundleExecutable raw "$fw/Info.plist")" = "$name"
+            xcrun lipo -verify_arch arm64 "$fw/$name"
+            xcrun vtool -show-build "$fw/$name" | grep -i 'platform IOS'
+          done
+          xcrun otool -L kit/Frameworks/OpenGLShim.framework/OpenGLShim | grep -F @rpath/MesaCore.framework/MesaCore
+          python3 -c 'import json; from pathlib import Path; c=json.loads(Path("kit/ios-sdk-exports.json").read_text()); assert "_glTexBuffer" in c["libraries"]["@rpath/OpenGLShim.framework/OpenGLShim"]'
+          printf 'Runtime source: run 45829046013, artifact 15121266496\nTool revision: %s\nNo game code or device authorization.\n' "$GITHUB_SHA" > kit/BUILD-PROVENANCE.txt
+          (cd kit && zip -qry ../TCMesaRuntimeKit.zip .)
+          unzip -t TCMesaRuntimeKit.zip
+          shasum -a 256 TCMesaRuntimeKit.zip > TCMesaRuntimeKit.zip.sha256
+      - uses: actions/upload-artifact@v4
+        with:
+          name: tc-mesa-runtime-kit-release
+          path: |
+            TCMesaRuntimeKit.zip
+            TCMesaRuntimeKit.zip.sha256
+          if-no-files-found: error
+  publish:
+    needs: verify
+    if: github.repository == 'sky9662/macos-on-ios-build' && github.event.repository.private == false
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: tc-mesa-runtime-kit-release
+          path: release
+      - name: Publish direct public kit ZIP
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          TAG: tc-mesa-kit-${{ github.run_id }}-${{ github.run_attempt }}
+        run: |
+          set -euxo pipefail
+          test "$(gh repo view "$GH_REPO" --json isPrivate --jq .isPrivate)" = false
+          test "$GH_REPO" = sky9662/macos-on-ios-build
+          (cd release && sha256sum -c TCMesaRuntimeKit.zip.sha256)
+          gh release create "$TAG" release/TCMesaRuntimeKit.zip release/TCMesaRuntimeKit.zip.sha256 --target "$GITHUB_SHA" --title "Mesa local runtime kit $TAG" --notes "Source-only compatibility kit with previously built Mesa frameworks and refreshed local audit tools. No game files, signing credentials or device records. Static and synthetic fixture checks only; game JIT and launch remain unverified." --prerelease

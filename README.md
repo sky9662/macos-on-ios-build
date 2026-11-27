@@ -30,3 +30,7 @@ Use separate, new IPA and audit report paths outside both input trees. Existing 
 The local converter checks traditional nlist imports and uncompressed dyld chained import tables (formats 1, 2, 3). Unsupported or malformed chained tables fail closed. This is static analysis, not validation of every chain pointer, dynamic symbol lookup, Steam initialization or runtime execution. A catalog entry cannot authorize the unavailable macOS pthread_jit_write_protect_np API; packaging remains blocked when this import is present. Apple's callback-based JIT requires source-level integration and applicable authorization; the existing independent allocator probe is compile-only. No replacement stub, game binary patch or security bypass is provided.
 
 Format reference: https://github.com/apple-oss-distributions/dyld/blob/main/include/mach-o/fixup-chains.h
+
+### Refreshing the Mesa runtime kit
+
+The dedicated Mesa runtime kit workflow reuses the exact SHA-256 verified archive from run 45829046013 (artifact 15121266496) instead of rebuilding Mesa. It refreshes the local Python tools, runs the synthetic ARM64 packaging fixture with the Mesa frameworks, and publishes a versioned ZIP and checksum to Releases. This is a public download, not an installable game. It does not modify the registered diagnostic bundle identifier. If the pinned artifact expires, a new validated runtime build must be pinned explicitly; no unverified fallback is used.
