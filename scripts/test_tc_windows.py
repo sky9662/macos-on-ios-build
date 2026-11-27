@@ -31,6 +31,30 @@ class Test(unittest.TestCase):
         mapping,missing=resolve_deps(sample,{"mapping":{},"libraries":{path:["_IOObjectRelease"]}})
         self.assertEqual(mapping[path],path)
         self.assertEqual(missing,[])
+    def test_chained_imports(self):
+        for fmt,stride in ((1,4),(2,8),(3,16)):
+            names=b"_example\0_weak\0"
+            entries=bytearray(2*stride)
+            if fmt==3:
+                struct.pack_into("<Q",entries,0,1)
+                struct.pack_into("<Q",entries,stride,0xfffe|0x10000|(9<<32))
+            else:
+                struct.pack_into("<I",entries,0,1)
+                struct.pack_into("<I",entries,stride,0xfe|0x100|(9<<9))
+            data=struct.pack("<7I",0,28,28,28+len(entries),2,fmt,0)+entries+names
+            cmd=struct.pack("<4I",CHAINED_FIXUPS,16,0,len(data))
+            result=chained_imports(data,[(CHAINED_FIXUPS,cmd)],["lib"])
+            self.assertEqual(result[0]["name"],"_example")
+            self.assertEqual(result[0]["library"],"lib")
+            self.assertEqual(result[1]["name"],"_weak")
+            self.assertEqual(result[1]["ordinal"],-2)
+            self.assertTrue(result[1]["weak"])
+            with self.assertRaises(ValueError):chained_imports(data[:-1],[(CHAINED_FIXUPS,cmd)],["lib"])
+    def test_legacy_jit_gate(self):
+        lib="/usr/lib/libSystem.B.dylib"
+        binary={"exports":[],"dependencies":[lib],"imports":[{"name":"_pthread_jit_write_protect_np","library":lib,"ordinal":1,"weak":False}]}
+        _,missing=resolve_deps({"binaries":{"test":binary}},{"mapping":{},"libraries":{lib:["_pthread_jit_write_protect_np"]}})
+        self.assertEqual(missing,["test: "+lib+" _pthread_jit_write_protect_np"])
     def test_fat(self):
         s=sample();fat=struct.pack(">7I",0xcafebabe,1,ARM64,0,32,len(s),0)+b"\0"*4+s
         self.assertEqual(thin(fat),thin(s))

@@ -24,3 +24,9 @@ TC Mesa uses the stable application bundle identifier `com.sky9662.tcmesadiagnos
 ### Local packaging preflight
 
 Use separate, new IPA and audit report paths outside both input trees. Existing reports are preserved, including after a failed preflight. The source-only fixture tests cover path collisions. Round 53 device rendering passed; game-specific imports and JIT remain unverified.
+
+### Import audit coverage and JIT gate
+
+The local converter checks traditional nlist imports and uncompressed dyld chained import tables (formats 1, 2, 3). Unsupported or malformed chained tables fail closed. This is static analysis, not validation of every chain pointer, dynamic symbol lookup, Steam initialization or runtime execution. A catalog entry cannot authorize the unavailable macOS pthread_jit_write_protect_np API; packaging remains blocked when this import is present. Apple's callback-based JIT requires source-level integration and applicable authorization; the existing independent allocator probe is compile-only. No replacement stub, game binary patch or security bypass is provided.
+
+Format reference: https://github.com/apple-oss-distributions/dyld/blob/main/include/mach-o/fixup-chains.h

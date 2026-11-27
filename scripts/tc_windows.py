@@ -71,6 +71,35 @@ def sections(cmd):
     for i in range(n):
         pos=72+i*80; offset=u32(cmd,pos+48)
         if offset: yield offset
+# Public Mach-O format: Apple dyld include/mach-o/fixup-chains.h.
+CHAINED_FIXUPS=0x80000034
+def chained_imports(b,cs,libs):
+    found=[x for c,x in cs if c==CHAINED_FIXUPS]
+    if not found:return []
+    if len(found)!=1 or len(found[0])!=16:raise ValueError("invalid chained fixups command")
+    off,size=struct.unpack_from("<II",found[0],8)
+    if size<28 or off+size>len(b):raise ValueError("truncated chained fixups")
+    version,starts,imports,symbols,count,fmt,sfmt=struct.unpack_from("<7I",b,off)
+    if version!=0 or sfmt!=0 or fmt not in (1,2,3):
+        raise ValueError("unsupported chained fixups import/symbol format")
+    stride={1:4,2:8,3:16}[fmt]
+    if not (28<=imports<=symbols<=size) or count>(symbols-imports)//stride:
+        raise ValueError("invalid chained import bounds")
+    result=[]
+    for i in range(count):
+        p=off+imports+i*stride
+        if fmt==3:
+            value=u64(b,p);ordinal=value&0xffff;weak=bool(value&0x10000);nameoff=value>>32
+            if ordinal>0xfff0:ordinal-=0x10000
+        else:
+            value=u32(b,p);ordinal=value&0xff;weak=bool(value&0x100);nameoff=value>>9
+            if ordinal>0xf0:ordinal-=0x100
+        if ordinal>len(libs) or ordinal< -3:raise ValueError("invalid chained library ordinal")
+        name=string(b,off+symbols+nameoff,off+size)
+        if not name:raise ValueError("empty chained import name")
+        result.append({"name":name,"library":libs[ordinal-1] if ordinal>0 else None,
+                       "ordinal":ordinal,"weak":weak,"source":"chained"})
+    return result
 def inspect(raw):
     b=thin(raw); cs=commands(b)
     libs=[dep_name(x) for c,x in cs if c in LOADS]
@@ -88,7 +117,10 @@ def inspect(raw):
                 imports.append({"name":name,"library":libs[ordinal-1] if 0<ordinal<=len(libs) else None,"ordinal":ordinal,"weak":bool(desc&0x40)})
             elif ty&0xe in (2,14):
                 exports.append(name)
+    chained=chained_imports(b,cs,libs)
+    imports.extend(chained)
     return {"sha256":hashlib.sha256(raw).hexdigest(),"size":len(raw),
+            "chained_import_count":len(chained),
             "dependencies":libs,"rpaths":[dep_name(x) for c,x in cs if c==RPATH],
             "flat_namespace":not bool(u32(b,24)&0x80),
             "platforms":[u32(x,8) for c,x in cs if c==BUILD],
@@ -176,8 +208,19 @@ def resolve_deps(report,catalog):
             mapping[dep]=new
         visible=set().union(*exports.values(),*deps.values())
         for imp in entry["imports"]:
+            # This macOS API has no supported drop-in iOS replacement.
+            # A catalog entry alone must not make the packaging gate pass.
+            if imp["name"]=="_pthread_jit_write_protect_np":
+                unresolved.append(f"{name}: {imp['library'] or 'flat'} {imp['name']}")
+                continue
             if imp["weak"]:continue
-            if imp["library"] in deps: ok=imp["name"] in deps[imp["library"]]
+            if imp.get("source")=="chained" and imp["ordinal"]==0:
+                ok=imp["name"] in exports[name]
+            elif imp.get("source")=="chained" and imp["ordinal"]==-1:
+                ok=imp["name"] in exports.get("Turing Complete",set())
+            elif imp.get("source")=="chained" and imp["ordinal"] in (-2,-3):
+                ok=imp["name"] in provided
+            elif imp["library"] in deps: ok=imp["name"] in deps[imp["library"]]
             elif imp["ordinal"]==0:ok=imp["name"] in visible
             elif imp["ordinal"] in (254,255):ok=imp["name"] in provided
             else:ok=False
