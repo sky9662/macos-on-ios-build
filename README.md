@@ -34,3 +34,7 @@ Format reference: https://github.com/apple-oss-distributions/dyld/blob/main/incl
 ### Refreshing the Mesa runtime kit
 
 The dedicated Mesa runtime kit workflow reuses the exact SHA-256 verified archive from run 45829046013 (artifact 15121266496) instead of rebuilding Mesa. It refreshes the local Python tools, runs the synthetic ARM64 packaging fixture with the Mesa frameworks, and publishes a versioned ZIP and checksum to Releases. This is a public download, not an installable game. It does not modify the registered diagnostic bundle identifier. If the pinned artifact expires, a new validated runtime build must be pinned explicitly; no unverified fallback is used.
+
+### JIT integration status
+
+See [JIT source integration boundary](jit/SOURCE-INTEGRATION.md) for the upstream review and remaining developer/API authorization gate. Static audit success is not game execution.
