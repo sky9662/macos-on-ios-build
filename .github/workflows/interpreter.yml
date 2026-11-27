@@ -1,0 +1,48 @@
+name: Bounded ARM64 interpreter feasibility
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'interpreter/**'
+      - '.github/workflows/interpreter.yml'
+  workflow_dispatch:
+permissions:
+  contents: read
+concurrency:
+  group: tc-interpreter
+  cancel-in-progress: false
+jobs:
+  portable:
+    if: github.repository == 'sky9662/macos-on-ios-build' && github.event.repository.private == false
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - name: Run bounded guest-data fixtures with sanitizers
+        run: |
+          set -euxo pipefail
+          cc -std=c11 -Wall -Wextra -Werror -fsanitize=address,undefined -g interpreter/arm64_subset.c interpreter/test.c -o "$RUNNER_TEMP/interpreter-test"
+          "$RUNNER_TEMP/interpreter-test"
+  apple:
+    if: github.repository == 'sky9662/macos-on-ios-build' && github.event.repository.private == false
+    runs-on: xcode-27
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - name: Compare interpreter with independently assembled native ARM64 fixtures
+        run: |
+          set -euxo pipefail
+          test "$(uname -m)" = arm64
+          xcrun --sdk macosx clang -std=c11 -Wall -Wextra -Werror -DTC_NATIVE_FIXTURE interpreter/arm64_subset.c interpreter/test.c interpreter/fixture.s -o "$RUNNER_TEMP/interpreter-test"
+          "$RUNNER_TEMP/interpreter-test"
+      - name: Compile for iOS without JIT or host callbacks
+        run: |
+          set -euxo pipefail
+          xcrun --sdk iphoneos clang -target arm64-apple-ios17.0 -std=c11 -Wall -Wextra -Werror -c interpreter/arm64_subset.c -o "$RUNNER_TEMP/interpreter.o"
+          xcrun lipo -verify_arch arm64 "$RUNNER_TEMP/interpreter.o"
+          xcrun vtool -show-build "$RUNNER_TEMP/interpreter.o" | grep -i 'platform IOS'
+          xcrun nm -u "$RUNNER_TEMP/interpreter.o" > "$RUNNER_TEMP/imports.txt"
+          if grep -E 'mmap|mprotect|jit_write|mach_vm|dlopen|dlsym' "$RUNNER_TEMP/imports.txt"; then exit 1; fi
