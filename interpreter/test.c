@@ -9,6 +9,8 @@ extern uint32_t tc_adder(uint32_t a,uint32_t b,uint32_t carry);
 extern void tc_loop(uint32_t *value,uint32_t count);
 extern uint64_t tc_wide(uint64_t a,uint64_t b);
 extern void tc_mem_widths(uint8_t *p);
+extern uint64_t tc_compare(uint64_t a);
+extern uint64_t tc_constants(void);
 #endif
 /* Independently authored A64 instruction fixtures; see fixture.s. */
 static const uint32_t adder[]={0x4a010003,0x0a010004,0x0a020065,0x2a050081,
@@ -18,6 +20,8 @@ static const uint32_t loop[]={0xb9400002,0x11000442,0xb9000002,0x51000421,
 static const uint32_t wide_ops[]={0xca010000,0x91000400,0xaa00fc00,0xd65f03c0};
 static const uint32_t widths[]={0x39400001,0x79000401,0x79400402,0xf9000402,
                                 0xf9400403,0xd65f03c0};
+static const uint32_t cmp[]={0xf100141f,0x54000062,0xd2800020,0xd65f03c0,0xd2800040,0xd65f03c0};
+static const uint32_t constants[]={0xd2824680,0xf2b579a0,0xf2d13560,0xf2fdfbc0,0xd65f03c0};
 #define LENGTH(a) (sizeof(a)/sizeof((a)[0]))
 int main(void) {
     for(uint32_t a=0;a<2;a++) for(uint32_t b=0;b<2;b++) for(uint32_t c=0;c<2;c++) {
@@ -70,6 +74,35 @@ int main(void) {
         r.x[0]=UINT64_C(1)<<32;
         assert(tc_interpret(cbnz,LENGTH(cbnz),&r,NULL,0,16)==TC_OK);
     }
+    for(unsigned i=0;i<1024;i++) {
+        TCRegisters r={0};r.x[0]=i;
+        assert(tc_interpret(cmp,LENGTH(cmp),&r,NULL,0,16)==TC_OK);
+        assert(r.x[0]==(i>=5?2u:1u));
+#ifdef TC_NATIVE_FIXTURE
+        assert(r.x[0]==tc_compare(i));
+#endif
+    }
+    {
+        TCRegisters r={0};
+        assert(tc_interpret(constants,LENGTH(constants),&r,NULL,0,16)==TC_OK);
+        assert(r.x[0]==UINT64_C(0xefde89ababcd1234));
+#ifdef TC_NATIVE_FIXTURE
+        assert(r.x[0]==tc_constants());
+#endif
+        const uint32_t add32[]={0x31000400,0xd65f03c0};
+        r.x[0]=UINT32_MAX;
+        assert(tc_interpret(add32,LENGTH(add32),&r,NULL,0,16)==TC_OK && r.x[0]==0 && r.nzcv==6);
+        r.x[0]=0x7fffffff;
+        assert(tc_interpret(add32,LENGTH(add32),&r,NULL,0,16)==TC_OK && r.x[0]==0x80000000 && r.nzcv==9);
+        const uint32_t sub64[]={0xf1000400,0xd65f03c0};
+        r.x[0]=UINT64_C(0x8000000000000000);
+        assert(tc_interpret(sub64,LENGTH(sub64),&r,NULL,0,16)==TC_OK && r.x[0]==INT64_MAX && r.nzcv==3);
+        r.x[0]=0;
+        assert(tc_interpret(sub64,LENGTH(sub64),&r,NULL,0,16)==TC_OK && r.x[0]==UINT64_MAX && r.nzcv==8);
+        const uint32_t bad_shift[]={0x52c00000,0xd65f03c0},bad_cond[]={0x5400002f,0xd65f03c0};
+        assert(tc_interpret(bad_shift,LENGTH(bad_shift),&r,NULL,0,16)==TC_UNSUPPORTED);
+        assert(tc_interpret(bad_cond,LENGTH(bad_cond),&r,NULL,0,16)==TC_UNSUPPORTED);
+    }
     TCRegisters r={0};uint8_t mem[4]={1,2,3,4},before[4];memcpy(before,mem,4);
     const uint32_t jump[]={0x14000000}, bad[]={0xd61f0000}, oob[]={0xb9400402,0xd65f03c0},
                    past[]={0x14000002}, negative[]={0x17ffffff}, sp[]={0x110003e0};
@@ -81,7 +114,7 @@ int main(void) {
     assert(tc_interpret(negative,LENGTH(negative),&r,mem,4,16)==TC_BOUNDS);
     assert(tc_interpret(adder,LENGTH(adder),&r,mem,4,0)==TC_ARGUMENT);
     assert(memcmp(mem,before,4)==0);
-    puts("PASS: 8 adders, 64 loops, 1024 wide arithmetic, 256 memory-width cases, bounds and zero-extension guards");
+    puts("PASS: 8 adders, 64 loops, 1024 wide arithmetic, 256 memory-width cases, bounds and zero-extension guards, 1024 comparisons, constants and NZCV edge cases");
 #ifdef TC_NATIVE_FIXTURE
     /* Host CPU-time comparison; no device or commercial workload claims. */
     uint64_t total=0;clock_t begin=clock();
@@ -98,7 +131,7 @@ int main(void) {
     }
     clock_t finish=clock();
     assert(total==native_total && total==UINT64_C(12800000));
-    printf("Synthetic benchmark: interpreted %.6f s; native %.6f s; iterations=12800000\\n",
+    printf("Synthetic benchmark: interpreted %.6f s; native %.6f s; iterations=12800000\n",
            (double)(middle-begin)/CLOCKS_PER_SEC,(double)(finish-middle)/CLOCKS_PER_SEC);
 #endif
     return 0;

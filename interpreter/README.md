@@ -9,3 +9,7 @@ The local audit suggests a candidate generated-code boundary; it does not establ
 ## Second feasibility round
 
 First run 45979232930 passed both jobs (portable sanitizer tests and native ARM64 comparison / iOS compilation). Extend the isolated register model to 64-bit and all four unsigned-offset load/store widths. Test upper-half values, W zero-extension, 64-bit conditional branches, overflow and guest memory bounds. Add 1,024 wide-operation and 256 memory-width cases with independent native assembly comparisons, plus an optimized host-only timed loop comparison. The timing is a synthetic workload, not a device or game benchmark. No host pointers, executable allocations, callback integration or packaging gate changes. Instruction coverage is still deliberately small.
+
+## Third feasibility round
+
+Run 46121584053 passed both jobs; recorded synthetic CPU times 0.491416 s interpreted vs 0.013617 s native for 12,800,000 loop iterations. These are host-only measurements; not game or device speed. Add immediate flag-setting ADD/SUB (including CMP), integer NZCV and conditional branches EQ through LE, and MOVZ/MOVN/MOVK constants. Extend native comparison fixtures and arithmetic edge tests. The original no-SP, isolated-memory and no-host-callback constraints remain. No game ABI or code emission coverage has been established; do not claim this is a playable game.

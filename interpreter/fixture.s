@@ -34,3 +34,21 @@ _tc_mem_widths:
     str x2,[x0,#8]
     ldr x3,[x0,#8]
     ret
+.globl _tc_compare
+.p2align 2
+_tc_compare:
+    cmp x0,#5
+    b.hs 1f
+    mov x0,#1
+    ret
+1:
+    mov x0,#2
+    ret
+.globl _tc_constants
+.p2align 2
+_tc_constants:
+    movz x0,#0x1234
+    movk x0,#0xabcd,lsl #16
+    movk x0,#0x89ab,lsl #32
+    movk x0,#0xefde,lsl #48
+    ret
