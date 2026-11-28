@@ -4,7 +4,7 @@
 #include <stdint.h>
 
 typedef enum { TC_OK, TC_ARGUMENT, TC_UNSUPPORTED, TC_BOUNDS, TC_BUDGET } TCStatus;
-typedef struct { uint32_t w[31]; } TCRegisters;
+typedef struct { uint64_t x[31]; } TCRegisters;
 /* Instruction words are immutable data. Memory is an isolated little-endian
  * guest buffer, never a host address. Failure leaves partial guest state;
  * callers must discard it. No host callbacks, syscalls or executable pages. */

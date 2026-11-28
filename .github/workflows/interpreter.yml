@@ -36,7 +36,7 @@ jobs:
         run: |
           set -euxo pipefail
           test "$(uname -m)" = arm64
-          xcrun --sdk macosx clang -std=c11 -Wall -Wextra -Werror -DTC_NATIVE_FIXTURE interpreter/arm64_subset.c interpreter/test.c interpreter/fixture.s -o "$RUNNER_TEMP/interpreter-test"
+          xcrun --sdk macosx clang -std=c11 -Wall -Wextra -Werror -O2 -DTC_NATIVE_FIXTURE interpreter/arm64_subset.c interpreter/test.c interpreter/fixture.s -o "$RUNNER_TEMP/interpreter-test"
           "$RUNNER_TEMP/interpreter-test"
       - name: Compile for iOS without JIT or host callbacks
         run: |
