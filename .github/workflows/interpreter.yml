@@ -70,3 +70,51 @@ jobs:
           cc -std=c11 -Wall -Wextra -Werror -O2 -c interpreter/arm64_subset.c -o "$RUNNER_TEMP/tc-subset.o"
           c++ -std=c++17 -O2 -DVIXL_INCLUDE_SIMULATOR_AARCH64 $(pkg-config --cflags vixl) -I/usr/include/vixl interpreter/vixl_reference.cc "$RUNNER_TEMP/tc-subset.o" $(pkg-config --libs vixl) -o "$RUNNER_TEMP/tc-vixl-reference"
           timeout 30s "$RUNNER_TEMP/tc-vixl-reference"
+  vixl-source:
+    if: github.repository == 'sky9662/macos-on-ios-build' && github.event.repository.private == false
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - name: Fetch exact Ubuntu source via signed archive metadata
+        run: |
+          set -euxo pipefail
+          test -f /etc/apt/sources.list.d/ubuntu.sources
+          sudo sed 's/^Types: deb$/Types: deb-src/' /etc/apt/sources.list.d/ubuntu.sources | sudo tee /etc/apt/sources.list.d/tc-vixl-source.sources >/dev/null
+          sudo apt-get update
+          mkdir -p "$RUNNER_TEMP/vixl-download" "$RUNNER_TEMP/vixl-transfer"
+          cd "$RUNNER_TEMP/vixl-download"
+          apt-get source vixl=5.1.0-3
+          test -d vixl-5.1.0/src
+          test -f vixl-5.1.0/LICENCE
+          sha256sum ./*.dsc ./*.tar.*
+          tar -czf "$RUNNER_TEMP/vixl-transfer/vixl-source.tgz" -C vixl-5.1.0 src LICENCE
+          cd "$RUNNER_TEMP/vixl-transfer"
+          sha256sum vixl-source.tgz > vixl-source.tgz.sha256
+      - uses: actions/upload-artifact@v4
+        with:
+          name: vixl-5.1.0-3-source-for-probe
+          path: ${{ runner.temp }}/vixl-transfer/
+          if-no-files-found: error
+          retention-days: 1
+  vixl-apple:
+    needs: vixl-source
+    if: github.repository == 'sky9662/macos-on-ios-build' && github.event.repository.private == false
+    runs-on: xcode-27
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: actions/download-artifact@v4
+        with:
+          name: vixl-5.1.0-3-source-for-probe
+          path: ${{ runner.temp }}/vixl-transfer
+      - name: Build and link VIXL for macOS and iOS without executable code buffer allocation
+        run: |
+          set -euxo pipefail
+          test "$(uname -m)" = arm64
+          (cd "$RUNNER_TEMP/vixl-transfer" && shasum -a 256 -c vixl-source.tgz.sha256)
+          mkdir -p "$RUNNER_TEMP/vixl-source"
+          tar -xzf "$RUNNER_TEMP/vixl-transfer/vixl-source.tgz" -C "$RUNNER_TEMP/vixl-source"
+          bash -n interpreter/build_vixl_apple.sh
+          bash interpreter/build_vixl_apple.sh "$RUNNER_TEMP/vixl-source" "$RUNNER_TEMP/vixl-apple"
