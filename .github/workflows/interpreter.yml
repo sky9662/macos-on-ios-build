@@ -46,3 +46,27 @@ jobs:
           xcrun vtool -show-build "$RUNNER_TEMP/interpreter.o" | grep -i 'platform IOS'
           xcrun nm -u "$RUNNER_TEMP/interpreter.o" > "$RUNNER_TEMP/imports.txt"
           if grep -E 'mmap|mprotect|jit_write|mach_vm|dlopen|dlsym' "$RUNNER_TEMP/imports.txt"; then exit 1; fi
+  vixl-reference:
+    if: github.repository == 'sky9662/macos-on-ios-build' && github.event.repository.private == false
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - name: Install distribution-signed VIXL reference library
+        run: |
+          set -euxo pipefail
+          sudo apt-get update
+          candidate="$(apt-cache policy libvixl-dev | awk '/Candidate:/ {print $2}')"
+          case "$candidate" in 5.1.0-*) ;; *) echo "Unexpected reference version: $candidate"; exit 1;; esac
+          sudo apt-get install --no-install-recommends -y "libvixl-dev=$candidate" pkg-config
+          dpkg-query -W libvixl-dev
+          pkg-config --modversion vixl
+          cat /usr/share/doc/libvixl-dev/copyright
+      - name: Cross-check fixed synthetic instruction fixtures
+        run: |
+          set -euxo pipefail
+          cc -std=c11 -Wall -Wextra -Werror -O2 -c interpreter/arm64_subset.c -o "$RUNNER_TEMP/tc-subset.o"
+          c++ -std=c++17 -O2 -DVIXL_INCLUDE_SIMULATOR_AARCH64 $(pkg-config --cflags vixl) -I/usr/include/vixl interpreter/vixl_reference.cc "$RUNNER_TEMP/tc-subset.o" $(pkg-config --libs vixl) -o "$RUNNER_TEMP/tc-vixl-reference"
+          timeout 30s "$RUNNER_TEMP/tc-vixl-reference"
