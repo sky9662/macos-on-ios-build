@@ -118,3 +118,16 @@ jobs:
           tar -xzf "$RUNNER_TEMP/vixl-transfer/vixl-source.tgz" -C "$RUNNER_TEMP/vixl-source"
           bash -n interpreter/build_vixl_apple.sh
           bash interpreter/build_vixl_apple.sh "$RUNNER_TEMP/vixl-source" "$RUNNER_TEMP/vixl-apple"
+      - name: Package unsigned fixed-fixture iOS diagnostic
+        run: |
+          set -euxo pipefail
+          bash -n interpreter/package_device_probe.sh
+          bash interpreter/package_device_probe.sh "$RUNNER_TEMP/vixl-source" "$RUNNER_TEMP/vixl-apple" "$RUNNER_TEMP/vixl-device"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: tc-vixl-device-probe
+          path: |
+            ${{ runner.temp }}/vixl-device/tc-vixl-probe.ipa
+            ${{ runner.temp }}/vixl-device/tc-vixl-probe.ipa.sha256
+            ${{ runner.temp }}/vixl-device/imports.txt
+          if-no-files-found: error

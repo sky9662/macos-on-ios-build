@@ -3,6 +3,7 @@
 #include <cstdint>
 #include <cstdio>
 #include <cstdlib>
+#include <chrono>
 #include "aarch64/simulator-aarch64.h"
 extern "C" {
 #include "arm64_subset.h"
@@ -30,7 +31,7 @@ static void compare(Simulator& sim,const uint32_t (&words)[N],
     sim.RunFrom(reinterpret_cast<const Instruction*>(words));
     require(static_cast<uint64_t>(sim.ReadXRegister(0))==expected);
 }
-int main() {
+extern "C" int tc_vixl_fixed_probe() {
     Decoder decoder;
     Simulator sim(&decoder);
     for(uint64_t a=0;a<2;a++) for(uint64_t b=0;b<2;b++) for(uint64_t c=0;c<2;c++)
@@ -52,4 +53,21 @@ int main() {
         require(static_cast<uint64_t>(sim.ReadXRegister(0))==i*19);
     }
     std::puts("PASS: VIXL vs bounded subset: 2056 shared cases; 128 extra MUL cases");
+    return 0;
 }
+
+extern "C" double tc_vixl_fixed_benchmark() {
+    Decoder decoder;
+    Simulator sim(&decoder);
+    auto start=std::chrono::steady_clock::now();
+    for(uint64_t i=0;i<10000;i++) {
+        sim.WriteXRegister(0,i);
+        sim.WriteXRegister(1,19);
+        sim.RunFrom(reinterpret_cast<const Instruction*>(multiply));
+        require(static_cast<uint64_t>(sim.ReadXRegister(0))==i*19);
+    }
+    return std::chrono::duration<double>(std::chrono::steady_clock::now()-start).count();
+}
+#ifndef TC_DEVICE_PROBE
+int main() { int rc=tc_vixl_fixed_probe(); std::printf("10000 fixed calls: %.6f s\n",tc_vixl_fixed_benchmark()); return rc; }
+#endif
